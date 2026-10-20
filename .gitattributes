@@ -1,0 +1,39 @@
+# 统一换行符，避免两台 Windows 机器因 CRLF/LF 差异产生无意义的整文件 diff
+* text=auto eol=lf
+
+# 源代码
+*.ts   text eol=lf
+*.vue  text eol=lf
+*.js   text eol=lf
+*.mjs  text eol=lf
+*.json text eol=lf
+*.md   text eol=lf
+*.yml  text eol=lf
+*.yaml text eol=lf
+*.xml  text eol=lf
+*.sql  text eol=lf
+*.sh   text eol=lf
+*.bat  text eol=crlf
+*.cmd  text eol=crlf
+
+# 二进制文件：禁止 diff 与换行转换
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.gif   binary
+*.ico   binary
+*.webp  binary
+*.tif   binary
+*.tiff  binary
+*.jar   binary
+*.war   binary
+*.zip   binary
+*.gz    binary
+*.pdf   binary
+*.docx  binary
+*.doc   binary
+*.xlsx  binary
+*.pptx  binary
+*.woff  binary
+*.woff2 binary
+*.ttf   binary

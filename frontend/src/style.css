@@ -1,0 +1,51 @@
+/* 全局样式：冷色调工程风（Linear 风格偏好） */
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+html, body, #app { height: 100%; }
+
+body {
+  font-family: 'Inter', 'PingFang SC', 'Microsoft YaHei', system-ui, sans-serif;
+  background: #f6f8fa;
+  color: #1f2329;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* 平台主题色变量 */
+:root {
+  --brand: #2f54eb;          /* 主色：工程蓝 */
+  --brand-dark: #0b1530;     /* 侧边栏/大屏深色 */
+  --ok: #22c55e;
+  --warn: #f59e0b;
+  --alarm: #ef4444;
+  --offline: #9ca3af;
+}
+
+/* ---- GIS 大屏里的 Element 弹出层深色适配（popper 挂在 body 下，只能全局覆盖） ---- */
+.screen-dark-popper.el-popper {
+  background: rgba(6, 28, 46, 0.95) !important;
+  border: 1px solid rgba(56, 189, 248, 0.3) !important;
+  backdrop-filter: blur(8px);
+}
+
+.screen-dark-popper .el-dropdown-menu {
+  background: transparent !important;
+  border: none !important;
+}
+
+.screen-dark-popper .el-dropdown-menu__item {
+  color: #cbd5e1 !important;
+}
+
+.screen-dark-popper .el-dropdown-menu__item:not(.is-disabled):hover {
+  background: rgba(34, 211, 238, 0.15) !important;
+  color: #22d3ee !important;
+}
+
+.screen-dark-popper .el-dropdown-menu__item.is-disabled {
+  color: #475569 !important;
+}
+
+.screen-dark-popper .el-popper__arrow::before {
+  background: rgba(6, 28, 46, 0.95) !important;
+  border-color: rgba(56, 189, 248, 0.3) !important;
+}
