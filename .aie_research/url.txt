@@ -1,1 +1,0 @@
-https://files.pythonhosted.org/packages/57/1e/8540341f8dd1e0e45f9e34cd3808d01d5295e642a9937ef5f32a9f31daf8/aiearth_openapi-1.3.0-py3-none-any.whl
