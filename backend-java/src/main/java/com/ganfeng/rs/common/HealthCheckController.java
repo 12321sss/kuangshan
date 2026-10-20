@@ -29,7 +29,7 @@ public class HealthCheckController {
     private final DataSource dataSource;
     private final RestTemplate rest;
 
-    @Value("${INFERENCE_BASE_URL:http://localhost:8000}")
+    @Value("${INFERENCE_BASE_URL:http://localhost:8010}")
     private String inferenceBaseUrl;
 
     public HealthCheckController(DataSource dataSource, RestTemplateBuilder builder) {

@@ -200,11 +200,73 @@ export const reportApi = {
     forecast: any
     sensorOnline: number
     sensorAlarm: number
+    /** 生态指数统计（来自安全评估结果的 rsei 字段），可选 */
+    rsei?: any
+    /** 安全风险评估结果，可选 */
+    safety?: any
   }): Promise<{ filename: string; docx_base64: string }> {
     return sentinel
       .post('/api/v1/report/generate', data)
       .then((r) => {
         if (r.data.code !== 0) throw new Error(r.data.message || '报告生成失败')
+        return r.data.data
+      })
+  }
+}
+
+/** 遥感生态指数 RSEI（三因子：绿度/湿度/干度） */
+export interface RseiResult {
+  sceneId: string
+  datetime: string
+  cloudCover: number
+  mean: number
+  levels: Array<{ label: string; range: string; pct: number; color: string }>
+  pc1Weight: number[]
+  weightLabels: string[]
+  explainRatio: number
+  formula: Record<string, string>
+  precision: { resolution: string; level: string; limitation: string }
+  reference: string
+  imageBase64?: string
+  compare?: {
+    sceneId: string
+    datetime: string
+    mean: number
+    levels: RseiResult['levels']
+    earlyMean: number
+    lateMean: number
+    deltaMean: number
+    improvedPct: number
+    stablePct: number
+    degradedPct: number
+    verdict: string
+    note: string
+  }
+}
+
+export const ecologyApi = {
+  /** 计算 RSEI；传 compareStart/compareEnd 则同时返回两期对比 */
+  rsei(params: {
+    aoi: number[][]
+    startDate: string
+    endDate: string
+    maxCloud?: number
+    withImage?: boolean
+    compareStart?: string
+    compareEnd?: string
+  }): Promise<RseiResult> {
+    return sentinel
+      .post('/api/v1/ecology/rsei', {
+        aoi: params.aoi,
+        start_date: params.startDate,
+        end_date: params.endDate,
+        max_cloud: params.maxCloud ?? 30,
+        with_image: params.withImage ?? true,
+        compare_start: params.compareStart,
+        compare_end: params.compareEnd
+      }, { timeout: 600000 })
+      .then((r) => {
+        if (r.data.code !== 0) throw new Error(r.data.message || 'RSEI 计算失败')
         return r.data.data
       })
   }

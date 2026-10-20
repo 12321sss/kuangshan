@@ -47,6 +47,14 @@
               <div class="level-tag" :style="{ background: result.score!.color }">
                 {{ result.score!.level }}风险
               </div>
+              <!-- 安全指数视角：100 - 风险分，客户更直观理解「分越高越安全」 -->
+              <div v-if="result.score!.safetyIndex != null" class="safety-index">
+                矿山安全指数 <b>{{ result.score!.safetyIndex }}</b>
+                <span class="si-level">（{{ result.score!.safetyLevel }}）</span>
+              </div>
+              <div v-if="result.score!.ahp" class="ahp-note">
+                权重：{{ result.score!.weightMethod }}，一致性 CR={{ result.score!.ahp.CR }}
+              </div>
               <div class="score-project">{{ result.projectName }}</div>
               <div class="score-time">
                 {{ formatTime(result.generatedAt) }} · {{ result.recordCount }} 条解译记录
@@ -426,4 +434,10 @@ watch(() => projectStore.currentId, () => {
   .overview { grid-template-columns: 1fr; }
   .two-col, .risk-wrap { grid-template-columns: 1fr; }
 }
+.safety-index {
+  font-size: 13px; color: #1f2329; margin-top: 4px;
+}
+.safety-index b { font-size: 18px; color: #0d9488; margin: 0 2px; }
+.si-level { color: #4e5969; font-size: 12px; }
+.ahp-note { font-size: 11px; color: #a9aeb8; margin-top: 2px; }
 </style>

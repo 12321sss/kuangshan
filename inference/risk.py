@@ -32,13 +32,55 @@ import numpy as np
 # ---------------------------------------------------------------------------
 # 权重与分级
 # ---------------------------------------------------------------------------
-DIMENSIONS = [
-    ("terrain", "形态风险", 0.25),
-    ("expansion", "扩张风险", 0.25),
-    ("encroach", "越界风险", 0.20),
-    ("coverage", "覆盖风险", 0.15),
-    ("hydrology", "水文风险", 0.15),
-]
+# AHP 判断矩阵（6×6），顺序与 _DIM_KEYS 一致
+# 取值依据：矿山开采安全中「形态（边坡）」与「扩张强度」是主导风险；
+# 越界涉及合规、覆盖与水文反映地表稳定性、生态质量作为综合状态分量。
+_AHP_MATRIX = np.array([
+    #  形态   扩张   越界   覆盖   水文   生态
+    [1.0,   1.0,  1.5,  2.0,  2.0,  3.0],   # 形态风险
+    [1.0,   1.0,  1.5,  2.0,  2.0,  3.0],   # 扩张风险
+    [1/1.5, 1/1.5, 1.0, 1.5,  1.5,  2.0],   # 越界风险
+    [1/2.0, 1/2.0, 1/1.5, 1.0, 1.0,  1.5],  # 覆盖风险
+    [1/2.0, 1/2.0, 1/1.5, 1.0, 1.0,  1.5],  # 水文风险
+    [1/3.0, 1/3.0, 1/2.0, 1/1.5, 1/1.5, 1.0],  # 生态风险
+])
+
+# 随机一致性指标 RI（Saaty）
+_RI = {1: 0.0, 2: 0.0, 3: 0.58, 4: 0.90, 5: 1.12, 6: 1.24, 7: 1.32, 8: 1.41, 9: 1.45}
+
+_DIM_KEYS = ["terrain", "expansion", "encroach", "coverage", "hydrology", "ecology"]
+_DIM_LABELS = {
+    "terrain": "形态风险", "expansion": "扩张风险", "encroach": "越界风险",
+    "coverage": "覆盖风险", "hydrology": "水文风险", "ecology": "生态风险",
+}
+
+
+def ahp_weights() -> dict[str, Any]:
+    """AHP 求权重 + 一致性检验（CR < 0.1 表示判断矩阵可接受）。
+
+    用 AHP 而非直接拍权重，是为了让权重可追溯、可复核、可通过一致性检验，
+    报告里能写明「权重经 AHP 一致性检验，CR=x」。
+    """
+    a = _AHP_MATRIX
+    n = a.shape[0]
+    weights = (a / a.sum(axis=0)).mean(axis=1)
+    lam_max = float(np.mean((a @ weights) / weights))
+    ci = (lam_max - n) / (n - 1) if n > 2 else 0.0
+    ri = _RI.get(n, 1.45)
+    cr = ci / ri if ri > 0 else 0.0
+    return {
+        "weights": [round(float(w), 4) for w in weights],
+        "lambdaMax": round(lam_max, 4),
+        "CI": round(ci, 4),
+        "CR": round(cr, 4),
+        "consistent": cr < 0.1,
+        "note": "CR < 0.1，判断矩阵一致性可接受" if cr < 0.1
+                else "CR ≥ 0.1，判断矩阵一致性不足，需调整",
+    }
+
+
+_AHP = ahp_weights()
+DIMENSIONS = [(k, _DIM_LABELS[k], w) for k, w in zip(_DIM_KEYS, _AHP["weights"])]
 
 LEVELS = [
     (20, "低", "#4caf50"),
@@ -60,6 +102,19 @@ def _level_of(score: float) -> tuple[str, str]:
         if score < limit:
             return label, color
     return "高", "#d32f2f"
+
+
+def _safety_level(safety_index: float) -> str:
+    """安全指数（100-风险分）对应的等级措辞，供报告直接引用"""
+    if safety_index >= 80:
+        return "安全"
+    if safety_index >= 60:
+        return "基本安全"
+    if safety_index >= 40:
+        return "需关注"
+    if safety_index >= 20:
+        return "风险较高"
+    return "高风险"
 
 
 def _clamp(v: float, lo: float = 0.0, hi: float = 100.0) -> float:
@@ -250,6 +305,50 @@ def _encroach_risk(encroach: dict) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 # D 覆盖风险
 # ---------------------------------------------------------------------------
+def _ecology_risk(rsei_stats: dict | None) -> dict[str, Any]:
+    """生态风险：基于遥感生态指数 RSEI
+
+    RSEI 越低说明生态质量越差（植被稀疏、地表裸露、湿度低、干度大），
+    地表抗蚀与固土能力弱，间接抬高水土流失与边坡失稳风险。
+
+    RSEI 为三因子版本（绿度/湿度/干度），不含热环境维度——
+    Sentinel-2 没有热红外波段，详见 ecology.py 的口径说明。
+    """
+    if not rsei_stats or rsei_stats.get("mean") is None:
+        return {
+            "score": 40.0,
+            "confidence": "low",
+            "evidence": ["未计算 RSEI，按中性偏保守分计入"],
+            "advice": "在提取页执行一次生态指数计算可获得该维度",
+        }
+
+    mean = float(rsei_stats["mean"])
+    # RSEI 0.75 以上视为生态良好（风险 0），0 则风险满分
+    score = _clamp((0.75 - mean) / 0.75 * 100)
+
+    evidence = [f"RSEI 均值 {mean:.3f}"]
+    levels = rsei_stats.get("levels") or []
+    poor = sum(l["pct"] for l in levels if l.get("label") in ("差", "较差"))
+    if levels:
+        evidence.append(f"生态「差/较差」等级共占 {poor:.1f}%")
+
+    if mean < 0.3:
+        advice = "生态质量偏低，建议核查裸地扩张与植被恢复措施落实情况"
+    elif mean < 0.55:
+        advice = "生态质量中等，关注裸地与水系周边的植被恢复"
+    else:
+        advice = "生态质量尚可，保持常规监测"
+
+    return {
+        "score": round(score, 2),
+        "confidence": "high",
+        "evidence": evidence,
+        "advice": advice,
+        "rseiMean": round(mean, 4),
+        "rseiPoorPct": round(poor, 2) if levels else None,
+    }
+
+
 def _coverage_risk(classes_ha: dict[str, float], aoi_ha: float) -> dict[str, Any]:
     """植被覆盖不足 + 裸地占比高
 
@@ -585,6 +684,7 @@ def evaluate(payload: dict[str, Any]) -> dict[str, Any]:
         "encroach": _encroach_risk(encroach),
         "coverage": _coverage_risk(class_area_ha, aoi_ha),
         "hydrology": _hydrology_risk(terrain, pond_pct, dump_on_flow),
+        "ecology": _ecology_risk(payload.get("rsei")),
     }
 
     dimensions = []
@@ -622,6 +722,12 @@ def evaluate(payload: dict[str, Any]) -> dict[str, Any]:
             "level": label,
             "color": color,
             "dimensions": dimensions,
+            # 权重方法：AHP 层次分析法，附一致性检验结果供报告引用
+            "weightMethod": "AHP 层次分析法",
+            "ahp": _AHP,
+            # 安全指数视角：客户更习惯「分数越高越安全」，与风险分互补
+            "safetyIndex": _r(100.0 - total, 1),
+            "safetyLevel": _safety_level(100.0 - total),
         },
         "encroachment": encroach,
         "terrain": terrain,

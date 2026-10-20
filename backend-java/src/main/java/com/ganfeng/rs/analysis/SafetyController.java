@@ -48,6 +48,9 @@ public class SafetyController {
     private static final List<String> DISTURBED_TYPES =
             List.of("PIT", "DUMP", "TAILINGS", "BARE", "ROAD");
 
+    private static final org.slf4j.Logger logger =
+            org.slf4j.LoggerFactory.getLogger(SafetyController.class);
+
     private final ExtractionService extractionService;
     private final ProjectService projectService;
     private final PermissionGuard guard;
@@ -55,7 +58,7 @@ public class SafetyController {
     private final RestTemplate rest;
     private final ObjectMapper mapper = new ObjectMapper();
 
-    @Value("${INFERENCE_BASE_URL:http://localhost:8000}")
+    @Value("${INFERENCE_BASE_URL:http://localhost:8010}")
     private String inferenceBaseUrl;
 
     public SafetyController(ExtractionService extractionService,
@@ -141,12 +144,55 @@ public class SafetyController {
         // ---- 4. 时序趋势（D1 扩张速率）----
         Map<String, Object> trend = buildTrend(all);
 
+        // ---- 4.5 RSEI 生态指数（生态维度输入；失败不阻塞整体评估）----
+        // 日期范围由最新解译记录的拍摄日期往前推一年推导，避免前端额外传参。
+        // RSEI 需拉 6 个波段（含 B12），首次约 1-3 分钟，之后有 tile 缓存。
+        Map<String, Object> rseiStats = null;
+        try {
+            String latestDate = latest.values().stream()
+                    .map(Extraction::getAcquisitionDate)
+                    .filter(java.util.Objects::nonNull)
+                    .max(java.util.Comparator.naturalOrder())
+                    .map(java.time.LocalDate::toString)
+                    .orElse(java.time.LocalDate.now().toString());
+            String start = java.time.LocalDate.parse(latestDate).minusYears(1).toString();
+
+            Map<String, Object> rq = new LinkedHashMap<>();
+            rq.put("aoi", aoi);
+            rq.put("start_date", start);
+            rq.put("end_date", latestDate);
+            rq.put("max_cloud", 40);
+            rq.put("with_image", false);
+
+            @SuppressWarnings("unchecked")
+            Map<String, Object> rresp = rest.postForObject(
+                    inferenceBaseUrl + "/api/v1/ecology/rsei", rq, Map.class);
+            if (rresp != null && Integer.valueOf(0).equals(rresp.get("code"))) {
+                @SuppressWarnings("unchecked")
+                Map<String, Object> rd = (Map<String, Object>) rresp.get("data");
+                rseiStats = new LinkedHashMap<>();
+                rseiStats.put("mean", rd.get("mean"));
+                rseiStats.put("levels", rd.get("levels"));
+                rseiStats.put("sceneId", rd.get("sceneId"));
+                rseiStats.put("datetime", rd.get("datetime"));
+                logger.info("RSEI 计算成功：均值={}，日期范围 {}~{}", rd.get("mean"), start, latestDate);
+            } else {
+                // 非 0 返回（最常见是「该时段无云影像」）也要留痕，否则前端只看到「未计算」不知原因
+                Object msg = rresp == null ? "空响应" : rresp.get("message");
+                logger.warn("RSEI 返回非成功状态：{}（日期 {}~{}）", msg, start, latestDate);
+            }
+        } catch (Exception ex) {
+            // 生态维度算不出来不应让整个安全评估失败，降级为中性分并在结果里体现
+            logger.warn("RSEI 计算失败，生态维度按中性分计入：{}", ex.getMessage());
+        }
+
         // ---- 5. 调 inference 风险接口 ----
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("aoi", aoi);
         payload.put("permitBoundary", permit.isEmpty() ? null : permit);
         payload.put("classes", classesPayload);
         payload.put("trend", trend);
+        payload.put("rsei", rseiStats);
         payload.put("withGrid", withGrid);
         payload.put("zoom", 14);
 
@@ -170,6 +216,10 @@ public class SafetyController {
 
         // ---- 6. 补充上下文并记审计 ----
         result.put("available", true);
+        // 附带 RSEI 统计：报告页据此写「生态质量评价」章节，无需前端二次调用
+        if (rseiStats != null) {
+            result.put("rsei", rseiStats);
+        }
         result.put("projectName", projectName);
         result.put("recordCount", latest.size());
         result.put("generatedAt", java.time.LocalDateTime.now().toString());

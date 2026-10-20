@@ -224,7 +224,9 @@ async function downloadReport(projectName: string): Promise<void> {
     forecast: forecast.value || {},
     sensorOnline: sensorOnline.value,
     sensorAlarm: sensorAlarm.value,
-    safety
+    safety,
+    // RSEI 由安全评估一并返回（已算好，直接写进报告第五章）
+    rsei: (safety as any)?.rsei || null
   })
   const byteChars = atob(res.docx_base64)
   const bytes = new Uint8Array(byteChars.length)

@@ -119,18 +119,23 @@ def generate_report(data: dict) -> bytes:
             cells[3].text = f"{f.get('upperHa', 0) / 100:.2f}"
         _add_note(doc, "注：趋势外推非实测结果，实际扩张速率受采矿计划、地形与政策等因素影响。")
 
-    # ---- 五、安全风险评估（多因子融合）----
+    # ---- 五、生态质量评价（RSEI）----
+    rsei = data.get("rsei")
+    if rsei and rsei.get("mean") is not None:
+        _add_rsei_section(doc, rsei)
+
+    # ---- 六、安全风险评估（多因子融合）----
     safety = data.get("safety")
     if safety and safety.get("available") and safety.get("score"):
         _add_safety_section(doc, safety)
 
-    # ---- 六、传感器监测概况 ----
-    _add_heading(doc, "六、传感器监测概况", level=1)
+    # ---- 七、传感器监测概况 ----
+    _add_heading(doc, "七、传感器监测概况", level=1)
     _add_kv(doc, "在线设备数", str(data.get("sensorOnline", 0)))
     _add_kv(doc, "未处理告警数", str(data.get("sensorAlarm", 0)))
 
-    # ---- 七、结论与口径说明 ----
-    _add_heading(doc, "七、结论与口径说明", level=1)
+    # ---- 八、结论与口径说明 ----
+    _add_heading(doc, "八、结论与口径说明", level=1)
     doc.add_paragraph("本报告输出为「潜在水土流失风险筛查」，非实测侵蚀量。")
     doc.add_paragraph("「持续复绿」仅表示植被覆盖度回升，不等于生态修复成功。")
     if safety and safety.get("available"):
@@ -145,6 +150,62 @@ def generate_report(data: dict) -> bytes:
     return buf.getvalue()
 
 
+def _add_rsei_section(doc: Document, rsei: dict) -> None:
+    """生态质量评价章节（遥感生态指数 RSEI）
+
+    口径：三因子 RSEI（绿度/湿度/干度），不含热环境维度——
+    Sentinel-2 无热红外波段，无法反演地表温度。必须在正文写明，避免客户误当完整 RSEI。
+    """
+    _add_heading(doc, "五、生态质量评价（RSEI）", level=1)
+    _add_kv(doc, "RSEI 均值", str(rsei.get("mean")))
+    if rsei.get("datetime"):
+        _add_kv(doc, "影像日期", str(rsei.get("datetime"))[:10])
+    if rsei.get("sceneId"):
+        _add_kv(doc, "数据来源", str(rsei.get("sceneId")))
+
+    levels = rsei.get("levels") or []
+    if levels:
+        doc.add_paragraph("生态质量分级占比（RSEI 0~1，越高越好）：")
+        table = doc.add_table(rows=1, cols=3)
+        table.style = "Light Grid Accent 1"
+        head = table.rows[0].cells
+        head[0].text = "等级"
+        head[1].text = "RSEI 区间"
+        head[2].text = "面积占比"
+        for l in levels:
+            cells = table.add_row().cells
+            cells[0].text = str(l.get("label", ""))
+            cells[1].text = str(l.get("range", ""))
+            cells[2].text = f"{l.get('pct', 0)}%"
+
+    # 主成分权重：说明「哪一项主导了本区生态状况」
+    weights = rsei.get("pc1Weight") or []
+    labels = rsei.get("weightLabels") or ["绿度 NDVI", "湿度 WET", "干度 NDBSI"]
+    if weights and len(weights) == len(labels):
+        doc.add_paragraph("第一主成分（PC1）各指标载荷：")
+        for lab, w in zip(labels, weights):
+            doc.add_paragraph(f"{lab}：{w}", style="List Bullet")
+        if rsei.get("explainRatio"):
+            _add_note(doc, f"PC1 解释方差比例 {rsei['explainRatio']}，"
+                           "比例越高说明这三项指标越能代表本区生态状况的整体差异。")
+
+    # 两期对比结论
+    cmp_ = rsei.get("compare")
+    if cmp_:
+        doc.add_paragraph("与上一期对比：")
+        _add_kv(doc, "前期 RSEI 均值", str(cmp_.get("earlyMean")))
+        _add_kv(doc, "本期 RSEI 均值", str(cmp_.get("lateMean")))
+        _add_kv(doc, "变化", str(cmp_.get("deltaMean")))
+        _add_kv(doc, "结论", str(cmp_.get("verdict", "")))
+        _add_kv(doc, "改善/稳定/退化占比",
+                f"{cmp_.get('improvedPct')}% / {cmp_.get('stablePct')}% / {cmp_.get('degradedPct')}%")
+
+    _add_note(doc, "口径说明：本 RSEI 为三因子版本（绿度 NDVI + 湿度 WET + 干度 NDBSI），"
+                   "不含热环境维度——Sentinel-2 没有热红外波段，无法反演地表温度。"
+                   "完整四因子 RSEI 需融合 Landsat 8/9 热红外数据，属后续增强项。"
+                   "RSEI 反映生态质量相对状况，不能直接等同于生态修复成效。")
+
+
 def _add_safety_section(doc: Document, safety: dict) -> None:
     """安全风险评估章节
 
@@ -152,9 +213,16 @@ def _add_safety_section(doc: Document, safety: dict) -> None:
     否则报告无法支撑现场核查，也无法在质询时说明结论来源。
     """
     score = safety["score"]
-    _add_heading(doc, "五、开采安全风险评估", level=1)
+    _add_heading(doc, "六、开采安全风险评估", level=1)
 
     _add_kv(doc, "综合风险分", f"{score.get('total')} / 100（{score.get('level')}风险）")
+    if score.get("safetyIndex") is not None:
+        _add_kv(doc, "矿山安全指数", f"{score.get('safetyIndex')} / 100（{score.get('safetyLevel')}）")
+    ahp = score.get("ahp") or {}
+    if ahp:
+        _add_note(doc, f"权重方法：{score.get('weightMethod', 'AHP 层次分析法')}；"
+                       f"一致性检验 CR = {ahp.get('CR')}（CR < 0.1 视为可接受），"
+                       f"λmax = {ahp.get('lambdaMax')}。")
     if safety.get("projectName"):
         _add_kv(doc, "评估项目", str(safety["projectName"]))
     if safety.get("recordCount"):

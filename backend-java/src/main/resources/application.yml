@@ -37,3 +37,7 @@ app:
     secret: ${JWT_SECRET:dev-only-secret-key-do-not-use-in-prod-0123456789abcdef}
     access-ttl-minutes: ${JWT_ACCESS_TTL_MINUTES:30}
     refresh-ttl-days: 7
+  # 解译服务地址：代码里用 @Value("${INFERENCE_BASE_URL:http://localhost:8010}") 读取。
+  # 注意：**不要在这里再定义 INFERENCE_BASE_URL 键**——键名与占位符同名会触发
+  # "Circular placeholder reference" 导致 Spring 启动失败（已踩过）。
+  # 换端口时改代码默认值，或用环境变量 INFERENCE_BASE_URL 覆盖。

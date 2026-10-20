@@ -51,7 +51,7 @@ public class ExtractionService {
     private final ProjectService projectService;
     private final RestTemplate rest;
 
-    @Value("${INFERENCE_BASE_URL:http://localhost:8000}")
+    @Value("${INFERENCE_BASE_URL:http://localhost:8010}")
     private String inferenceBaseUrl;
 
     @Value("${JAVA_CALLBACK_URL:http://localhost:8080/api/callback/task-complete}")

@@ -86,22 +86,38 @@ def _fetch_tile(z: int, x: int, y: int) -> np.ndarray:
 
 
 def read_dem_window(west: float, south: float, east: float, north: float,
-                    zoom: int = DEFAULT_ZOOM, max_dim: int = 512) -> dict[str, Any]:
+                    zoom: int = DEFAULT_ZOOM, max_dim: int = 512,
+                    max_tiles: int = 16) -> dict[str, Any]:
     """读取 AOI 范围的高程窗口
 
     返回 elevation / mPerPixel / bounds / zoom / tileCount
+
+    AOI 大到超过 max_tiles 时**自动降低 zoom**（精度降一档）而不是直接报错——
+    客户圈整个矿区是常态，拒绝分析等于功能不可用。降级后 mPerPixel 会变大，
+    返回值里带上实际 zoom，前端据此标注精度。
     """
     cx, cy = (west + east) / 2.0, (south + north) / 2.0
 
-    x0, y0 = lonlat_to_pixel(west, north, zoom)   # 左上
-    x1, y1 = lonlat_to_pixel(east, south, zoom)   # 右下
+    def _tile_span(z: int) -> tuple[int, int, int, int]:
+        _x0, _y0 = lonlat_to_pixel(west, north, z)
+        _x1, _y1 = lonlat_to_pixel(east, south, z)
+        return (int(_x0 // 256), int(_y0 // 256),
+                int((_x1 - 1e-6) // 256), int((_y1 - 1e-6) // 256))
 
-    tx0, ty0 = int(x0 // 256), int(y0 // 256)
-    tx1, ty1 = int((x1 - 1e-6) // 256), int((y1 - 1e-6) // 256)
-    if (tx1 - tx0 + 1) * (ty1 - ty0 + 1) > 16:
-        raise ValueError("AOI 过大（需超过 16 张高程瓦片），请缩小圈选范围")
+    # 逐级降 zoom，直到瓦片数落在上限内（z14→z13→z12→z11→z10）
+    effective_zoom = max(10, min(zoom, 15))
+    tx0, ty0, tx1, ty1 = _tile_span(effective_zoom)
+    while (tx1 - tx0 + 1) * (ty1 - ty0 + 1) > max_tiles and effective_zoom > 10:
+        effective_zoom -= 1
+        tx0, ty0, tx1, ty1 = _tile_span(effective_zoom)
+    if (tx1 - tx0 + 1) * (ty1 - ty0 + 1) > max_tiles * 4:
+        raise ValueError(
+            f"AOI 过大（z{effective_zoom} 仍需 {(tx1-tx0+1)*(ty1-ty0+1)} 张瓦片），"
+            "请缩小圈选范围")
     if tx0 < 0 or ty0 < 0:
         raise ValueError("AOI 超出 Web Mercator 有效范围")
+
+    zoom = effective_zoom
 
     n = 2 ** zoom
     canvas = np.zeros(((ty1 - ty0 + 1) * 256, (tx1 - tx0 + 1) * 256), dtype=np.float32)
@@ -116,7 +132,9 @@ def read_dem_window(west: float, south: float, east: float, north: float,
             canvas[rr:rr + 256, cc:cc + 256] = tile
             fetched += 1
 
-    # 裁剪到 AOI
+    # 裁剪到 AOI（zoom 可能被降级，需按最终 zoom 重算像素坐标）
+    x0, y0 = lonlat_to_pixel(west, north, zoom)
+    x1, y1 = lonlat_to_pixel(east, south, zoom)
     r0, c0 = int(round(y0 - ty0 * 256)), int(round(x0 - tx0 * 256))
     r1, c1 = int(round(y1 - ty0 * 256)), int(round(x1 - tx0 * 256))
     r0, c0 = max(0, r0), max(0, c0)

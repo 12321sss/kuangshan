@@ -19,6 +19,9 @@
         <el-button size="small" type="warning" plain :loading="terrainLoading" :disabled="aoi.length < 3" @click="doTerrain">
           地形分析
         </el-button>
+        <el-button size="small" type="success" plain :loading="rseiLoading" :disabled="aoi.length < 3" @click="doRsei">
+          生态指数 RSEI
+        </el-button>
       </div>
 
       <!-- 影像图层开关 -->
@@ -158,6 +161,82 @@
             <span class="bs-cnt">{{ b.count }} 片</span>
           </div>
         </div>
+
+        <!-- 多年份批量：一次性生成多年多类型的时序数据，直接落库供报告分析 -->
+        <el-collapse v-model="batchPanel" style="margin-top: 10px">
+          <el-collapse-item name="multi" title="批量时序提取（时间段 + 间隔）">
+            <el-form label-width="72px" size="small">
+              <el-form-item label="起始月份">
+                <el-date-picker v-model="batchStart" type="month" value-format="YYYY-MM"
+                                placeholder="起始年月" style="width:100%" :clearable="false" />
+              </el-form-item>
+              <el-form-item label="结束月份">
+                <el-date-picker v-model="batchEnd" type="month" value-format="YYYY-MM"
+                                placeholder="结束年月" style="width:100%" :clearable="false" />
+              </el-form-item>
+              <el-form-item label="时间间隔">
+                <el-select v-model="batchInterval" style="width:100%">
+                  <el-option :value="1" label="每 1 个月（同季多期，最密）" />
+                  <el-option :value="2" label="每 2 个月" />
+                  <el-option :value="3" label="每 3 个月（季度，推荐）" />
+                  <el-option :value="6" label="每 6 个月（半年）" />
+                  <el-option :value="12" label="每 12 个月（按年）" />
+                </el-select>
+              </el-form-item>
+              <el-form-item label="地物类型">
+                <el-checkbox-group v-model="batchTypes" size="small">
+                  <el-checkbox v-for="c in classOptions" :key="c.value" :value="c.value" :label="c.value">
+                    {{ c.label }}
+                  </el-checkbox>
+                </el-checkbox-group>
+              </el-form-item>
+              <el-form-item label="自动入库">
+                <el-switch v-model="batchAutoSave" size="small" />
+                <span class="threshold-hint" style="margin-left:6px">保存后才能进时序/报告</span>
+              </el-form-item>
+              <el-button
+                type="warning"
+                style="width:100%"
+                :loading="extracting"
+                :disabled="aoi.length < 3 || !batchTypes.length"
+                @click="doBatchMultiYear"
+              >
+                开始批量提取（{{ batchWindows.length }} 期 × {{ batchTypes.length }} 类 = {{ batchTotalTasks }} 个任务）
+              </el-button>
+              <div class="threshold-hint" style="margin-top:6px">
+                每期取该时段内云量最小的一景；任务数多于 12 个时耗时较长，建议分批
+              </div>
+              <!-- 时间段预览：让用户提交前就看清会跑哪些期 -->
+              <div v-if="batchWindows.length" class="win-preview">
+                <div class="wp-title">时段切分预览（共 {{ batchWindows.length }} 期）</div>
+                <div class="wp-list">
+                  <span v-for="(w, i) in batchWindows" :key="i" class="wp-item">{{ w.label }}</span>
+                </div>
+              </div>
+            </el-form>
+
+            <!-- 结果矩阵：年 × 类型 -->
+            <div v-if="batchMatrix.length" class="matrix">
+              <div class="mx-title">提取结果矩阵（覆盖率 %）</div>
+              <table class="mx-table">
+                <thead>
+                  <tr>
+                    <th>时段</th>
+                    <th v-for="t in batchMatrixTypes" :key="t.value">{{ t.label }}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="row in batchMatrix" :key="row.period">
+                    <td class="mx-y">{{ row.period }}</td>
+                    <td v-for="t in batchMatrixTypes" :key="t.value">
+                      {{ row.cells[t.value] != null ? row.cells[t.value] + '%' : '-' }}
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </el-collapse-item>
+        </el-collapse>
         <div v-if="!sceneInfo && aoi.length >= 3" class="threshold-hint" style="margin-top:6px">
           请先点上方「查询影像」加载影像，再开始提取
         </div>
@@ -216,6 +295,85 @@
           需结合排水设施与影像复核（筛查指标，非水文模型汇流结果）。
         </div>
         <div class="terrain-warn">{{ terrainResult.precision.limitation }}</div>
+      </el-card>
+
+      <!-- 生态质量 RSEI -->
+      <el-card v-if="rseiResult" shadow="never" class="side-card">
+        <template #header>
+          <div class="terrain-head">
+            <span class="side-title">生态质量指数 RSEI</span>
+            <span class="terrain-src">{{ rseiResult.precision.level }}</span>
+          </div>
+        </template>
+
+        <div class="terrain-kpi">
+          <div class="tk">
+            <div class="tk-num">{{ rseiResult.mean }}</div>
+            <div class="tk-label">RSEI 均值</div>
+          </div>
+          <div class="tk">
+            <div class="tk-num">{{ rseiResult.explainRatio ? (rseiResult.explainRatio * 100).toFixed(1) + '%' : '-' }}</div>
+            <div class="tk-label">PC1 解释率</div>
+          </div>
+          <div class="tk">
+            <div class="tk-num">{{ (rseiResult.datetime || '').slice(0, 7) }}</div>
+            <div class="tk-label">影像月份</div>
+          </div>
+        </div>
+
+        <!-- 分级占比条 -->
+        <div class="rsei-bar">
+          <div
+            v-for="l in rseiResult.levels"
+            :key="l.label"
+            class="rb-seg"
+            :style="{ width: l.pct + '%', background: l.color }"
+            :title="`${l.label}（${l.range}）：${l.pct}%`"
+          ></div>
+        </div>
+        <div class="rsei-legend">
+          <span v-for="l in rseiResult.levels" :key="l.label" class="rl-item">
+            <i :style="{ background: l.color }"></i>{{ l.label }} {{ l.pct }}%
+          </span>
+        </div>
+
+        <!-- PC1 载荷：说明哪一项主导本区生态 -->
+        <div class="rsei-weight">
+          <div class="rw-title">主成分载荷（正=促进生态，负=抑制）</div>
+          <div v-for="(w, i) in rseiResult.pc1Weight" :key="i" class="rw-row">
+            <span class="rw-label">{{ rseiResult.weightLabels[i] }}</span>
+            <div class="rw-track">
+              <div
+                class="rw-fill"
+                :class="{ neg: w < 0 }"
+                :style="{ width: Math.min(Math.abs(w) * 100, 100) + '%' }"
+              ></div>
+            </div>
+            <span class="rw-val">{{ w.toFixed(3) }}</span>
+          </div>
+        </div>
+
+        <!-- 两期对比 -->
+        <div v-if="rseiResult.compare" class="rsei-cmp">
+          <div class="rc-title">与 {{ (rseiResult.compare.datetime || '').slice(0, 10) }} 对比</div>
+          <div class="rc-row">
+            <span>RSEI：{{ rseiResult.compare.earlyMean }} → {{ rseiResult.compare.lateMean }}</span>
+            <span :class="rseiResult.compare.deltaMean >= 0 ? 'up' : 'down'">
+              {{ rseiResult.compare.deltaMean >= 0 ? '+' : '' }}{{ rseiResult.compare.deltaMean }}
+            </span>
+          </div>
+          <div class="rc-row">
+            <span>改善 {{ rseiResult.compare.improvedPct }}%</span>
+            <span>稳定 {{ rseiResult.compare.stablePct }}%</span>
+            <span>退化 {{ rseiResult.compare.degradedPct }}%</span>
+          </div>
+          <div class="rc-verdict">{{ rseiResult.compare.verdict }}</div>
+        </div>
+
+        <div class="method-note">
+          三因子 RSEI（绿度/湿度/干度），不含热环境维度：Sentinel-2 无热红外波段，
+          无法反演地表温度；完整四因子需融合 Landsat 热红外。
+        </div>
       </el-card>
 
       <!-- 结果样式 + 保存 + 变化对比 -->
@@ -377,11 +535,11 @@ import {
   ScreenSpaceEventHandler, ScreenSpaceEventType, Cartographic,
   CallbackProperty, PolygonHierarchy, SingleTileImageryProvider, Rectangle
 } from 'cesium'
-import { sentinelApi, terrainApi } from '@/api/sentinel'
+import { sentinelApi, terrainApi, ecologyApi } from '@/api/sentinel'
 import { haToKm2 } from '@/utils/format'
 import { extractionApi, projectApi, aoiWatchApi } from '@/api'
 import { useProjectStore } from '@/stores/project'
-import type { ExtractResult, PreviewResult, DiffHeatmapResult, TerrainResult } from '@/api/sentinel'
+import type { ExtractResult, PreviewResult, DiffHeatmapResult, TerrainResult, RseiResult } from '@/api/sentinel'
 import type { Extraction } from '@/api/types'
 import { tiandituBaseLayers, gaodeSatelliteProvider } from '@/map/basemap'
 import { autoAdjustPerformance } from '@/map/perf'
@@ -437,6 +595,10 @@ const watches = ref<Array<{
   latestDate?: string | null
   latestAreaHa?: number | null
 }>>([])
+// 生态指数 RSEI
+const rseiLoading = ref(false)
+const rseiResult = ref<RseiResult | null>(null)
+
 // 地形分析
 const terrainLoading = ref(false)
 const terrainResult = ref<TerrainResult | null>(null)
@@ -818,6 +980,153 @@ function readImageSize(url: string): Promise<{ width: number; height: number }> 
 }
 
 // ---- 提取 ----
+// ---- 批量时序提取（时间段 + 间隔）----
+const batchPanel = ref<string[]>([])
+/** 起始/结束月份（YYYY-MM） */
+const batchStart = ref('2022-01')
+const batchEnd = ref('2024-12')
+/** 时间间隔（月）：1/2/3/6/12 */
+const batchInterval = ref(3)
+const batchTypes = ref<string[]>(['VEGETATION', 'BARE', 'PIT'])
+const batchAutoSave = ref(true)
+/** 结果矩阵：每期一行，每类一列，值=覆盖率 */
+const batchMatrix = ref<Array<{ period: string; cells: Record<string, number | null> }>>([])
+
+interface BatchWindow {
+  label: string       // 展示用 2022-01~2022-03
+  startDate: string   // 检索用 2022-01-01
+  endDate: string     // 检索用 2022-03-31
+  name: string        // 入库名称用 2022Q1 / 2022-01
+}
+
+function _fmtMonth(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
+}
+
+function _monthEnd(d: Date): string {
+  // 该月最后一天
+  const last = new Date(d.getFullYear(), d.getMonth() + 1, 0)
+  return `${_fmtMonth(last)}-${String(last.getDate()).padStart(2, '0')}`
+}
+
+/**
+ * 按「起始月份 → 结束月份」以固定间隔切分成若干时段。
+ * 间隔 3 个月即季度窗口，12 个月即年度窗口，由用户自选。
+ */
+const batchWindows = computed<BatchWindow[]>(() => {
+  const parse = (ym: string) => {
+    const [y, m] = ym.split('-').map(Number)
+    return new Date(y, (m || 1) - 1, 1)
+  }
+  const cur = parse(batchStart.value)
+  const endLimit = parse(batchEnd.value)
+  if (isNaN(cur.getTime()) || isNaN(endLimit.getTime()) || cur > endLimit) return []
+
+  const step = Math.max(1, batchInterval.value)
+  const out: BatchWindow[] = []
+  let cursor = new Date(cur)
+  // 上限保护：最多切 60 期，防止误设间隔生成海量任务
+  while (cursor <= endLimit && out.length < 60) {
+    const winStart = new Date(cursor)
+    const winEnd = new Date(cursor)
+    winEnd.setMonth(winEnd.getMonth() + step - 1)
+    const realEnd = winEnd > endLimit ? endLimit : winEnd
+
+    out.push({
+      label: `${_fmtMonth(winStart)}~${_fmtMonth(realEnd)}`,
+      startDate: `${_fmtMonth(winStart)}-01`,
+      endDate: _monthEnd(realEnd),
+      name: step === 12
+        ? String(winStart.getFullYear())
+        : (step === 3 ? `${winStart.getFullYear()}Q${Math.floor(winStart.getMonth() / 3) + 1}`
+                      : _fmtMonth(winStart))
+    })
+    cursor = new Date(cursor)
+    cursor.setMonth(cursor.getMonth() + step)
+  }
+  return out
+})
+
+const batchTotalTasks = computed(() => batchWindows.value.length * batchTypes.value.length)
+const batchMatrixTypes = computed(
+  () => classOptions.filter((c) => batchTypes.value.includes(c.value)))
+
+/**
+ * 多年份批量提取：对每年 × 每类各跑一次解译，可选自动入库。
+ * 价值：一次生成多年时序数据，报告里的「面积时序变化」和「RSEI 变化」才有素材。
+ */
+async function doBatchMultiYear() {
+  const windows = batchWindows.value
+  if (aoi.value.length < 3 || !batchTypes.value.length || !windows.length) return
+  const total = windows.length * batchTypes.value.length
+
+  extracting.value = true
+  busy.value = true
+  stageSteps.value = windows.map((w) => w.label)
+  stageIndex.value = 0
+  batchMatrix.value = []
+  clearResult()
+
+  let done = 0
+  const errors: string[] = []
+  try {
+    for (let wi = 0; wi < windows.length; wi++) {
+      const w = windows[wi]
+      stageIndex.value = wi
+      const cells: Record<string, number | null> = {}
+      for (const t of batchTypes.value) {
+        done++
+        busyText.value = `正在提取 ${w.label} ${classLabelOf(t)}（${done}/${total}）`
+        busyHint.value = batchAutoSave.value ? '提取后自动入库，供时序与报告使用' : '仅预览，不入库'
+        try {
+          const res = await sentinelApi.extract(
+            aoi.value, w.startDate, w.endDate, t,
+            maxCloud.value, threshold.value, minArea.value)
+          const color = classOptions.find((c) => c.value === t)?.color || '#22c55e'
+          renderResult(res, color, false)
+          cells[t] = res.coverage_pct
+
+          if (batchAutoSave.value && res.features?.length) {
+            const rings: number[][][] = []
+            for (const f of res.features) {
+              const g = f.geometry
+              if (!g) continue
+              if (g.type === 'Polygon') rings.push(g.coordinates[0])
+              else if (g.type === 'MultiPolygon') for (const poly of g.coordinates) rings.push(poly[0])
+            }
+            await extractionApi.save({
+              projectId: projectStore.currentId!,
+              name: `${classLabelOf(t)}-${w.name}`,
+              classType: t,
+              features: rings,
+              aoiJson: JSON.stringify(aoi.value),
+              coveragePct: res.coverage_pct,
+              aoiAreaHa: ringAreaHa(aoi.value),
+              // 入库用该期实际影像日期（无则退回时段起始），时序排序依赖这个字段
+              acquisitionDate: (res.datetime || w.startDate).slice(0, 10),
+              satellite: 'SENTINEL2'
+            })
+          }
+        } catch (e: any) {
+          cells[t] = null
+          errors.push(`${w.label} ${classLabelOf(t)}：${friendlyError(e).slice(0, 30)}`)
+        }
+      }
+      batchMatrix.value.push({ period: w.label, cells })
+    }
+    await loadHistory()
+    if (errors.length) {
+      ElMessage.warning(`完成 ${total - errors.length}/${total}，${errors.length} 项失败：${errors[0]}`)
+    } else {
+      ElMessage.success(`批量提取完成：${windows.length} 期 × ${batchTypes.value.length} 类` +
+        (batchAutoSave.value ? '，已入库' : ''))
+    }
+  } finally {
+    extracting.value = false
+    busy.value = false
+  }
+}
+
 /** 批量提取结果：每类地物的覆盖率/要素数，汇总展示 */
 const batchResults = ref<Array<{
   classType: string
@@ -944,6 +1253,81 @@ function slopeColorOf(label: string): string {
   if (label.includes('6-15')) return '#ffd54f'
   if (label.includes('15-25')) return '#ff9800'
   return '#d32f2f'
+}
+
+/**
+ * 生态指数 RSEI：三因子 PCA（绿度/湿度/干度）。
+ * 同时算两期对比（本年 vs 上年），便于看生态是改善还是退化。
+ */
+async function doRsei() {
+  if (aoi.value.length < 3) {
+    ElMessage.warning('请先圈选 AOI')
+    return
+  }
+  rseiLoading.value = true
+  busy.value = true
+  busyText.value = '正在计算生态指数 RSEI'
+  busyHint.value = '需拉取 6 个波段（含短波红外），首次约 1-3 分钟'
+  stageSteps.value = ['检索影像', '下载 6 个波段', '计算绿度/湿度/干度', 'PCA 合成']
+  stageIndex.value = 0
+  try {
+    const res = await ecologyApi.rsei({
+      aoi: aoi.value,
+      startDate: startDate.value,
+      endDate: endDate.value,
+      maxCloud: maxCloud.value,
+      withImage: true,
+      // 对比期：与上一个等长区间比较
+      compareStart: shiftYear(startDate.value, -1),
+      compareEnd: shiftYear(endDate.value, -1)
+    })
+    stageIndex.value = 3
+    rseiResult.value = res
+    if (res.imageBase64) {
+      await renderRseiLayer(res.imageBase64)
+    }
+    ElMessage.success(
+      `RSEI 均值 ${res.mean}，PC1 解释率 ${res.explainRatio ? (res.explainRatio * 100).toFixed(0) + '%' : '-'}`
+    )
+  } catch (e: any) {
+    ElMessage.error(friendlyError(e))
+  } finally {
+    rseiLoading.value = false
+    busy.value = false
+  }
+}
+
+/** 日期字符串整体平移若干年（YYYY-MM-DD） */
+function shiftYear(date: string, delta: number): string {
+  if (!date) return date
+  const d = new Date(date)
+  if (isNaN(d.getTime())) return date
+  d.setFullYear(d.getFullYear() + delta)
+  return d.toISOString().slice(0, 10)
+}
+
+/** 把 RSEI 分级专题图贴到 AOI 范围（复用剪切影像图层） */
+async function renderRseiLayer(base64: string) {
+  const byteChars = atob(base64)
+  const bytes = new Uint8Array(byteChars.length)
+  for (let i = 0; i < byteChars.length; i++) bytes[i] = byteChars.charCodeAt(i)
+  const blob = new Blob([bytes], { type: 'image/png' })
+  const url = URL.createObjectURL(blob)
+  const { width, height } = await readImageSize(url)
+  if (clippedLayer && viewer) {
+    viewer.imageryLayers.remove(clippedLayer, true)
+  }
+  const bounds = aoiBounds()
+  if (!viewer) return
+  clippedLayer = viewer.imageryLayers.addImageryProvider(
+    new SingleTileImageryProvider({
+      url,
+      rectangle: Rectangle.fromDegrees(bounds.west, bounds.south, bounds.east, bounds.north),
+      tileWidth: width,
+      tileHeight: height
+    })
+  )
+  viewer.scene.requestRender()
 }
 
 async function doTerrain() {
@@ -1607,11 +1991,13 @@ function ringAreaHa(ring: number[][]): number {
 .cesium-container { width: 100%; height: 100%; }
 
 .map-toolbar {
-  position: absolute; top: 12px; left: 12px;
-  display: flex; align-items: center; gap: 10px;
+  position: absolute; top: 12px; left: 12px; right: 190px;
+  display: flex; align-items: center; gap: 8px;
+  flex-wrap: wrap;            /* 按钮多了换行，不再被挤出可视区 */
   background: rgba(255,255,255,0.92); border-radius: 8px; padding: 8px 10px;
   box-shadow: 0 4px 16px rgba(0,0,0,0.12); z-index: 5;
 }
+.map-toolbar :deep(.el-divider--vertical) { margin: 0 2px; }
 .aoi-info { font-size: 12px; color: #0d9488; font-weight: 600; }
 
 .layer-switch {
@@ -1779,4 +2165,46 @@ function ringAreaHa(ring: number[][]): number {
 .bs-label { flex: 1; }
 .bs-val { color: #0d9488; font-weight: 600; }
 .bs-cnt { color: #a9aeb8; width: 52px; text-align: right; }
+.matrix { margin-top: 10px; }
+.mx-title { font-size: 12px; font-weight: 600; color: #4e5969; margin-bottom: 6px; }
+.mx-table { width: 100%; border-collapse: collapse; font-size: 11px; }
+.mx-table th, .mx-table td {
+  border: 1px solid #eceef2; padding: 4px 6px; text-align: center; color: #4e5969;
+}
+.mx-table th { background: #fafbfc; font-weight: 600; }
+.mx-y { font-weight: 600; color: #1f2329; }
+.rsei-bar {
+  display: flex; height: 14px; border-radius: 4px; overflow: hidden;
+  margin-top: 8px; background: #f0f2f5;
+}
+.rb-seg { height: 100%; }
+.rsei-legend { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px; font-size: 11px; color: #4e5969; }
+.rl-item { display: flex; align-items: center; gap: 3px; }
+.rl-item i { width: 8px; height: 8px; border-radius: 2px; display: inline-block; }
+
+.rsei-weight { margin-top: 10px; border-top: 1px dashed #eceef2; padding-top: 8px; }
+.rw-title { font-size: 11px; color: #86909c; margin-bottom: 5px; }
+.rw-row { display: flex; align-items: center; gap: 6px; font-size: 11px; padding: 2px 0; }
+.rw-label { width: 68px; color: #4e5969; flex-shrink: 0; }
+.rw-track { flex: 1; height: 8px; background: #f0f2f5; border-radius: 4px; overflow: hidden; }
+.rw-fill { height: 100%; background: #1d9e75; }
+.rw-fill.neg { background: #e24b4a; }
+.rw-val { width: 46px; text-align: right; color: #4e5969; font-variant-numeric: tabular-nums; }
+
+.rsei-cmp { margin-top: 10px; border-top: 1px dashed #eceef2; padding-top: 8px; font-size: 11px; }
+.rc-title { font-weight: 600; color: #4e5969; margin-bottom: 4px; }
+.rc-row { display: flex; justify-content: space-between; color: #4e5969; padding: 2px 0; }
+.rc-row .up { color: #e24b4a; font-weight: 600; }
+.rc-row .down { color: #1d9e75; font-weight: 600; }
+.rc-verdict {
+  margin-top: 4px; padding: 4px 8px; background: #f0fdfa;
+  border-radius: 4px; color: #0d9488; font-weight: 600;
+}
+.win-preview { margin-top: 10px; border-top: 1px dashed #eceef2; padding-top: 8px; }
+.wp-title { font-size: 11px; color: #86909c; margin-bottom: 5px; }
+.wp-list { display: flex; flex-wrap: wrap; gap: 4px; }
+.wp-item {
+  font-size: 10px; color: #0d9488; background: #f0fdfa;
+  border: 1px solid #b2e8e0; border-radius: 3px; padding: 1px 5px;
+}
 </style>
