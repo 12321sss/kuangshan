@@ -10,4 +10,10 @@ public interface ExtractionRepository extends JpaRepository<Extraction, Long> {
 
     /** 按 inference 任务号查重（回调幂等） */
     List<Extraction> findByTaskId(String taskId);
+
+    /**
+     * 按 AOI 指纹查该区域的全部解译记录（按影像日期升序），
+     * 供「AOI 监测订阅」检查同一关注区的历史变化。
+     */
+    List<Extraction> findByAoiSignatureOrderByAcquisitionDateAsc(String aoiSignature);
 }

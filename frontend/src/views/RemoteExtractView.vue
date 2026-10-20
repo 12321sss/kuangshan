@@ -91,6 +91,15 @@
           <el-form-item label="最大云量">
             <el-slider v-model="maxCloud" :min="0" :max="100" show-input :show-input-controls="false" />
           </el-form-item>
+          <el-form-item label="波段组合">
+            <el-select v-model="combo" style="width: 100%" @change="onComboChange">
+              <el-option v-for="c in comboOptions" :key="c.value" :label="c.label" :value="c.value">
+                <span>{{ c.label }}</span>
+                <span style="float:right;color:#a9aeb8;font-size:11px">{{ c.hint }}</span>
+              </el-option>
+            </el-select>
+            <div class="threshold-hint">{{ comboHint }}</div>
+          </el-form-item>
           <el-button type="primary" style="width: 100%" :loading="previewing" :disabled="aoi.length < 3" @click="doPreview">
             查询影像
           </el-button>
@@ -131,6 +140,24 @@
         <el-button type="success" style="width: 100%" :loading="extracting" :disabled="aoi.length < 3 || !sceneInfo" @click="doExtract">
           开始提取
         </el-button>
+        <el-button
+          style="width: 100%; margin-top: 8px"
+          :loading="extracting"
+          :disabled="aoi.length < 3 || !sceneInfo"
+          @click="doBatchExtract"
+        >
+          批量提取全部类型
+        </el-button>
+        <!-- 批量结果汇总 -->
+        <div v-if="batchResults.length" class="batch-sum">
+          <div class="bs-title">本次批量结果</div>
+          <div v-for="b in batchResults" :key="b.classType" class="bs-row">
+            <span class="bs-dot" :style="{ background: b.color }"></span>
+            <span class="bs-label">{{ b.label }}</span>
+            <span class="bs-val">{{ b.coverage }}%</span>
+            <span class="bs-cnt">{{ b.count }} 片</span>
+          </div>
+        </div>
         <div v-if="!sceneInfo && aoi.length >= 3" class="threshold-hint" style="margin-top:6px">
           请先点上方「查询影像」加载影像，再开始提取
         </div>
@@ -234,6 +261,36 @@
           <el-button size="small" @click="exportGeoTiff">导出 GeoTIFF</el-button>
         </div>
 
+        <!-- 保存为关注区：圈一次，之后持续跟踪这块地的变化 -->
+        <div v-if="aoi.length >= 3" class="watch-row">
+          <el-button size="small" type="warning" plain @click="saveAsWatch">
+            保存为关注区（持续跟踪）
+          </el-button>
+        </div>
+
+        <!-- 我的关注区列表 -->
+        <div v-if="watches.length" class="timeline watch-list">
+          <div class="tl-title">我的关注区</div>
+          <div v-for="w in watches" :key="w.id" class="watch-item">
+            <div class="w-line1">
+              <span class="w-name">{{ w.name }}</span>
+              <span class="w-tag">{{ classLabelOf(w.classType) }}</span>
+              <span class="w-meta">{{ w.periodCount }} 期</span>
+            </div>
+            <div class="w-line2">
+              <span class="w-meta">{{ w.latestDate || '暂无解译' }}</span>
+              <span v-if="w.latestAreaHa != null" class="w-area">
+                {{ haToKm2(w.latestAreaHa) }} km²
+              </span>
+            </div>
+            <div class="w-ops">
+              <el-button size="small" text @click="locateWatch(w)">定位</el-button>
+              <el-button size="small" text type="primary" @click="checkWatch(w)">检查变化</el-button>
+              <el-button size="small" text type="danger" @click="removeWatch(w)">删除</el-button>
+            </div>
+          </div>
+        </div>
+
         <!-- 历史记录（按类型分组，勾选加入播放清单） -->
         <div class="timeline">
           <div class="tl-title">提取记录（按类型分组）</div>
@@ -322,7 +379,7 @@ import {
 } from 'cesium'
 import { sentinelApi, terrainApi } from '@/api/sentinel'
 import { haToKm2 } from '@/utils/format'
-import { extractionApi, projectApi } from '@/api'
+import { extractionApi, projectApi, aoiWatchApi } from '@/api'
 import { useProjectStore } from '@/stores/project'
 import type { ExtractResult, PreviewResult, DiffHeatmapResult, TerrainResult } from '@/api/sentinel'
 import type { Extraction } from '@/api/types'
@@ -338,6 +395,25 @@ const hasToken = !!TIANDITU_TOKEN
 const startDate = ref('2024-06-01')
 const endDate = ref('2024-12-31')
 const maxCloud = ref(30)
+/** 波段组合：不同组合凸显不同地物，是遥感判读的基本手段 */
+const combo = ref('TRUE_COLOR')
+const comboOptions = [
+  { value: 'TRUE_COLOR', label: '真彩色', hint: '接近肉眼所见' },
+  { value: 'FALSE_COLOR', label: '标准假彩色', hint: '植被显红' },
+  { value: 'NDVI', label: 'NDVI 植被指数', hint: '长势分级配色' },
+  { value: 'SWIR', label: '短波红外', hint: '水体暗·裸地亮' },
+  { value: 'URBAN', label: '城市裸地', hint: '建筑裸土偏青' }
+]
+const comboHint = computed(
+  () => comboOptions.find((c) => c.value === combo.value)?.hint || ''
+)
+
+/** 切换波段组合：已加载过影像就重新渲染，避免用户再点一次查询 */
+function onComboChange() {
+  if (sceneInfo.value && aoi.value.length >= 3) {
+    doPreview()
+  }
+}
 const classType = ref('VEGETATION')
 const threshold = ref<number | undefined>(undefined)
 const minArea = ref(20)
@@ -351,6 +427,16 @@ const heatmapVisible = ref(false)
 const heatmapResult = ref<DiffHeatmapResult | null>(null)
 const demoLoading = ref(false)
 const playing = ref(false)
+// AOI 关注区（监测订阅）
+const watches = ref<Array<{
+  id: number
+  name: string
+  classType: string
+  aoiJson: string
+  periodCount: number
+  latestDate?: string | null
+  latestAreaHa?: number | null
+}>>([])
 // 地形分析
 const terrainLoading = ref(false)
 const terrainResult = ref<TerrainResult | null>(null)
@@ -467,6 +553,7 @@ const aoiAreaText = computed(() => {
 // ---- 地图初始化 ----
 onMounted(() => {
   loadHistory()
+  loadWatches()
   if (!cesiumRef.value) return
   const layers = hasToken ? (() => {
     const { base, label } = tiandituBaseLayers('img')
@@ -663,7 +750,8 @@ async function doPreview() {
   stageSteps.value = ['检索无云影像', '下载影像波段', '合成真彩图']
   stageIndex.value = 0
   try {
-    const res: PreviewResult = await sentinelApi.preview(aoi.value, startDate.value, endDate.value, maxCloud.value)
+    const res: PreviewResult = await sentinelApi.preview(
+      aoi.value, startDate.value, endDate.value, maxCloud.value, combo.value)
     stageIndex.value = 2
     sceneInfo.value = { scene_id: res.scene_id, datetime: res.datetime, cloud_cover: res.cloud_cover }
     // 把 base64 PNG 转成 blob，贴到地图
@@ -730,6 +818,59 @@ function readImageSize(url: string): Promise<{ width: number; height: number }> 
 }
 
 // ---- 提取 ----
+/** 批量提取结果：每类地物的覆盖率/要素数，汇总展示 */
+const batchResults = ref<Array<{
+  classType: string
+  label: string
+  color: string
+  coverage: number
+  count: number
+}>>([])
+
+/**
+ * 批量提取：一次跑完全部地物类型，不同颜色叠加到地图上。
+ * 客户看整片矿区时，不用逐个类型点五遍。
+ */
+async function doBatchExtract() {
+  if (aoi.value.length < 3 || !sceneInfo.value) return
+  const types = classOptions.map((c) => c.value)
+  extracting.value = true
+  busy.value = true
+  busyHint.value = '逐类提取，首次较慢；有 tile 缓存后更快'
+  stageSteps.value = types.map((t) => classLabelOf(t))
+  stageIndex.value = 0
+  batchResults.value = []
+  clearResult()
+  try {
+    for (let i = 0; i < types.length; i++) {
+      const t = types[i]
+      busyText.value = `正在提取 ${classLabelOf(t)}（${i + 1}/${types.length}）`
+      stageIndex.value = i
+      const res = await sentinelApi.extract(
+        aoi.value, startDate.value, endDate.value, t,
+        maxCloud.value, threshold.value, minArea.value)
+      const color = classOptions.find((c) => c.value === t)?.color || '#22c55e'
+      // 叠加渲染：不清空前面的类型
+      renderResult(res, color, false)
+      batchResults.value.push({
+        classType: t,
+        label: classLabelOf(t),
+        color,
+        coverage: res.coverage_pct,
+        count: res.feature_count
+      })
+      // 让用户看到进度逐类出现
+      viewer?.scene.requestRender()
+    }
+    ElMessage.success(`批量提取完成，共 ${batchResults.value.length} 类地物`)
+  } catch (e: any) {
+    ElMessage.error(friendlyError(e))
+  } finally {
+    extracting.value = false
+    busy.value = false
+  }
+}
+
 async function doExtract() {
   extracting.value = true
   busy.value = true
@@ -758,10 +899,15 @@ async function doExtract() {
   }
 }
 
-function renderResult(res: ExtractResult) {
-  clearResult()
+/**
+ * 渲染解译结果到地图。
+ * @param colorOverride 指定颜色（批量提取时每类一个色）
+ * @param clearBefore  是否先清空已有图层（批量叠加时传 false）
+ */
+function renderResult(res: ExtractResult, colorOverride?: string, clearBefore = true) {
+  if (clearBefore) clearResult()
   if (!viewer) return
-  const color = resultColor.value
+  const color = colorOverride || resultColor.value
   const alpha = resultOpacity.value / 100
   for (const f of res.features) {
     const geom = f.geometry
@@ -852,6 +998,101 @@ async function renderSlopeLayer(b64: string) {
 function toggleSlope(v: boolean) {
   if (slopeLayer) slopeLayer.show = v
   viewer?.scene.requestRender()
+}
+
+// ---- AOI 关注区（监测订阅）----
+/** 地物类型中文名（关注区列表用） */
+function classLabelOf(code: string): string {
+  return classOptions.find((c) => c.value === code)?.label || code
+}
+
+async function loadWatches() {
+  const pid = projectStore.currentId
+  if (!pid) return
+  try {
+    watches.value = (await aoiWatchApi.list(pid)) as any
+  } catch {
+    watches.value = []
+  }
+}
+
+/** 把当前圈选的 AOI 存为关注区，之后可反复检查同一块地的变化 */
+async function saveAsWatch() {
+  const pid = projectStore.currentId
+  if (!pid) {
+    ElMessage.warning('请先在右上角选择项目')
+    return
+  }
+  if (aoi.value.length < 3) {
+    ElMessage.warning('请先圈选 AOI')
+    return
+  }
+  try {
+    await aoiWatchApi.create({
+      projectId: pid,
+      name: `${classLabelOf(classType.value)}关注区-${new Date().toLocaleDateString('zh-CN')}`,
+      aoi: aoi.value,
+      classType: classType.value
+    })
+    ElMessage.success('已保存为关注区，可在下方列表检查变化')
+    await loadWatches()
+  } catch (e: any) {
+    ElMessage.error(friendlyError(e))
+  }
+}
+
+/** 检查该关注区最近两期的变化 */
+async function checkWatch(w: { id: number; name: string }) {
+  try {
+    const r = await aoiWatchApi.check(w.id)
+    if (r.insufficient) {
+      ElMessage.warning(r.message)
+    } else {
+      const sign = (r.deltaPct ?? 0) >= 0 ? '+' : ''
+      const tip = `${w.name}：${r.prevDate} → ${r.lastDate}，面积 ${haToKm2(r.prevAreaHa)} → ${haToKm2(r.lastAreaHa)} km²（${sign}${r.deltaPct}%）`
+      if (r.significant) {
+        ElMessage.warning({ message: `${tip}｜${r.message}`, duration: 8000 })
+      } else {
+        ElMessage.success(tip)
+      }
+    }
+    await loadWatches()
+  } catch (e: any) {
+    ElMessage.error(friendlyError(e))
+  }
+}
+
+async function removeWatch(w: { id: number; name: string }) {
+  try {
+    await aoiWatchApi.remove(w.id)
+    ElMessage.success(`已删除「${w.name}」`)
+    await loadWatches()
+  } catch (e: any) {
+    ElMessage.error(friendlyError(e))
+  }
+}
+
+/** 把关注区的 AOI 重新画到地图上并飞过去 */
+function locateWatch(w: { aoiJson: string }) {
+  try {
+    const ring = JSON.parse(w.aoiJson) as number[][]
+    if (!Array.isArray(ring) || ring.length < 3) return
+    clearAoi()
+    aoi.value = ring
+    refreshAoi()
+    const bounds = aoiBounds()
+    viewer?.camera.flyTo({
+      destination: Cartesian3.fromDegrees(
+        (bounds.west + bounds.east) / 2,
+        (bounds.south + bounds.north) / 2,
+        4000
+      ),
+      duration: 1.2
+    })
+    viewer?.scene.requestRender()
+  } catch {
+    ElMessage.error('关注区坐标解析失败')
+  }
 }
 
 // ---- 保存与历史 ----
@@ -1510,4 +1751,32 @@ function ringAreaHa(ring: number[][]): number {
 }
 .lg-item { display: flex; align-items: center; gap: 5px; font-size: 12px; color: #4e5969; }
 .lg-dot { width: 10px; height: 10px; border-radius: 3px; display: inline-block; }
+.watch-row { margin: 8px 0; }
+.watch-list { margin-top: 8px; border-top: 1px dashed #eceef2; padding-top: 8px; }
+.watch-item {
+  border: 1px solid #f0f2f5; border-radius: 8px;
+  padding: 8px 10px; margin-bottom: 6px; background: #fafbfc;
+}
+.w-line1 { display: flex; align-items: center; gap: 6px; font-size: 12px; }
+.w-name { font-weight: 600; color: #1f2329; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.w-tag {
+  font-size: 11px; color: #0d9488; background: #e6f6f4;
+  padding: 1px 6px; border-radius: 4px; flex-shrink: 0;
+}
+.w-meta { font-size: 11px; color: #86909c; flex-shrink: 0; }
+.w-line2 { display: flex; gap: 10px; font-size: 11px; color: #86909c; margin-top: 3px; }
+.w-area { color: #0d9488; font-weight: 600; }
+.w-ops { display: flex; gap: 2px; margin-top: 4px; }
+.batch-sum {
+  margin-top: 10px; border-top: 1px dashed #eceef2; padding-top: 8px;
+}
+.bs-title { font-size: 12px; font-weight: 600; color: #4e5969; margin-bottom: 4px; }
+.bs-row {
+  display: flex; align-items: center; gap: 6px;
+  font-size: 12px; padding: 3px 0; color: #4e5969;
+}
+.bs-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.bs-label { flex: 1; }
+.bs-val { color: #0d9488; font-weight: 600; }
+.bs-cnt { color: #a9aeb8; width: 52px; text-align: right; }
 </style>

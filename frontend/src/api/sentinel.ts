@@ -54,6 +54,8 @@ export interface ExtractResult {
 
 export interface PreviewResult extends SceneInfo {
   image_base64: string
+  /** 本次渲染用的波段组合 */
+  combo?: string
 }
 
 export interface DiffHeatmapResult {
@@ -75,9 +77,9 @@ export const sentinelApi = {
       })
   },
   /** 真彩预览：AOI 剪切后的 RGB PNG（base64） */
-  preview(aoi: number[][], startDate: string, endDate: string, maxCloud = 30): Promise<PreviewResult> {
+  preview(aoi: number[][], startDate: string, endDate: string, maxCloud = 30, combo = 'TRUE_COLOR'): Promise<PreviewResult> {
     return sentinel
-      .post('/api/v1/sentinel/preview', { aoi, start_date: startDate, end_date: endDate, max_cloud: maxCloud })
+      .post('/api/v1/sentinel/preview', { aoi, start_date: startDate, end_date: endDate, max_cloud: maxCloud, combo })
       .then((r) => {
         if (r.data.code !== 0) throw new Error(r.data.message)
         return r.data.data

@@ -342,6 +342,8 @@ class OnlineSearchRequest(BaseModel):
     startDate: str = Field(..., alias="start_date", description="YYYY-MM-DD")
     endDate: str = Field(..., alias="end_date", description="YYYY-MM-DD")
     maxCloud: float = Field(30.0, alias="max_cloud")
+    # 波段组合：TRUE_COLOR 真彩 / FALSE_COLOR 假彩(植被红) / SWIR 短波红外 / URBAN 城市裸地 / NDVI 植被指数
+    combo: str = Field("TRUE_COLOR", description="波段组合")
 
 
 def _threshold_overrides(class_type: str, threshold: float | None) -> dict[str, float] | None:
@@ -561,13 +563,20 @@ def online_search(req: OnlineSearchRequest):
 
 @app.post("/api/v1/sentinel/preview")
 def online_preview(req: OnlineSearchRequest):
-    """AOI 真彩预览：检索 + 剪切 + RGB PNG（base64）"""
+    """AOI 影像预览：检索 + 剪切 + 按波段组合渲染 PNG（base64）"""
     try:
         feat = aws_sentinel.search_scene(req.aoi, req.startDate, req.endDate, req.maxCloud)
         if feat is None:
             return {"code": 404, "message": "无可用影像", "data": None}
-        clipped = aws_sentinel.clip_aoi(feat, req.aoi, ["B02", "B03", "B04"])
-        png = aws_sentinel.true_color_png(clipped["bands"])
+        # 按所需组合决定拉哪些波段（NDVI 需近红外；SWIR/URBAN 需短波红外）
+        combo = (req.combo or "TRUE_COLOR").upper()
+        need = {"B02", "B03", "B04"}
+        if combo in ("FALSE_COLOR", "NDVI"):
+            need.add("B08")
+        elif combo in ("SWIR", "URBAN"):
+            need.update({"B08", "B11"})
+        clipped = aws_sentinel.clip_aoi(feat, req.aoi, sorted(need))
+        png = aws_sentinel.composite_png(clipped["bands"], combo)
         import base64
         return {
             "code": 0, "message": "success",
@@ -575,6 +584,7 @@ def online_preview(req: OnlineSearchRequest):
                 "scene_id": feat.get("id"),
                 "datetime": feat.get("properties", {}).get("datetime"),
                 "cloud_cover": feat.get("properties", {}).get("eo:cloud_cover"),
+                "combo": combo,
                 "image_base64": base64.b64encode(png).decode(),
             },
         }

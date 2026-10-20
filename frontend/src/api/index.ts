@@ -322,3 +322,42 @@ export const shareApi = {
     note: string
   }> => http.get(`/share/view/${token}`)
 }
+
+/** AOI 监测订阅：圈一次关注区，持续跟踪该区域的地物变化 */
+export const aoiWatchApi = {
+  list: (projectId: number): Promise<Array<{
+    id: number
+    name: string
+    classType: string
+    aoiJson: string
+    signature: string | null
+    createdAt: string
+    lastCheckAt: string | null
+    periodCount: number
+    latestDate?: string | null
+    latestAreaHa?: number | null
+    latestCoveragePct?: number | null
+  }>> => http.get('/aoi-watch', { params: { projectId } }),
+
+  create: (req: { projectId: number; name?: string; aoi: number[][]; classType: string }) =>
+    http.post('/aoi-watch', req),
+
+  remove: (id: number): Promise<void> => http.delete(`/aoi-watch/${id}`),
+
+  /** 检查变化：对比该区域最近两期解译结果 */
+  check: (id: number): Promise<{
+    id: number
+    name: string
+    classType: string
+    periodCount: number
+    insufficient: boolean
+    message: string
+    prevDate?: string
+    lastDate?: string
+    prevAreaHa?: number
+    lastAreaHa?: number
+    deltaHa?: number
+    deltaPct?: number
+    significant?: boolean
+  }> => http.post(`/aoi-watch/${id}/check`)
+}

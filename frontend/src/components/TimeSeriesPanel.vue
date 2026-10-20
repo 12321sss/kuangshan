@@ -59,16 +59,22 @@
 
       <!-- 各期面积迷你趋势，一眼看出变化趋势 -->
       <div class="ts-trend">
-        <div
-          v-for="(s, i) in sequence"
-          :key="s.id"
-          class="ts-bar"
-          :class="{ active: i === currentIndex }"
-          :title="`${s.date} · ${haToKm2(s.extractAreaHa)} km²`"
-          @click="currentIndex = i; onSlide()"
-        >
-          <div class="ts-bar-fill" :style="{ height: barHeight(s) }"></div>
-        </div>
+        <template v-for="(s, i) in sequence" :key="s.id">
+          <div
+            class="ts-bar"
+            :class="{ active: i === currentIndex }"
+            :title="`${s.date} · ${haToKm2(s.extractAreaHa)} km²`"
+            @click="currentIndex = i; onSlide()"
+          >
+            <div class="ts-bar-fill" :style="{ height: barHeight(s) }"></div>
+          </div>
+          <!-- 数据缺口：相邻两期间隔过久时插一段灰色斜纹，说明该时段无可用无云影像 -->
+          <div
+            v-if="hasGapAfter(i)"
+            class="ts-gap"
+            :title="gapTooltip(i)"
+          ></div>
+        </template>
       </div>
     </div>
   </div>
@@ -101,6 +107,32 @@ const currentGroup = computed(() => groups.value.find((g) => g.signature === cur
 const currentItem = computed(() => sequence.value[currentIndex.value] || null)
 
 const maxArea = computed(() => Math.max(...sequence.value.map((s) => s.extractAreaHa || 0), 1))
+
+/** 相邻两期超过该天数视为数据缺口（约 13 个月，覆盖一年一景的常态） */
+const GAP_DAYS = 400
+
+/** 第 i 期与其后一期之间是否构成数据缺口 */
+function hasGapAfter(i: number): boolean {
+  return gapDaysBetween(i) > 0
+}
+
+function gapDaysBetween(i: number): number {
+  const a = sequence.value[i]
+  const b = sequence.value[i + 1]
+  if (!a || !b) return 0
+  const da = new Date(a.date).getTime()
+  const db = new Date(b.date).getTime()
+  if (isNaN(da) || isNaN(db)) return 0
+  const days = (db - da) / 86400000
+  return days > GAP_DAYS ? Math.round(days) : 0
+}
+
+/** 缺口提示：告诉用户这段为什么没有数据（通常是该时段无可用无云影像） */
+function gapTooltip(i: number): string {
+  const days = gapDaysBetween(i)
+  const months = Math.max(1, Math.round(days / 30.4))
+  return `数据缺口约 ${months} 个月：该时段无可用无云影像，非系统漏采`
+}
 
 function barHeight(s: any) {
   const h = ((s.extractAreaHa || 0) / maxArea.value) * 100
@@ -267,5 +299,15 @@ loadGroups()
 }
 .ts-bar.active .ts-bar-fill {
   background: var(--el-color-primary);
+}
+.ts-gap {
+  width: 6px;
+  align-self: stretch;
+  background: repeating-linear-gradient(
+    45deg, #d9dde3, #d9dde3 2px, transparent 2px, transparent 4px
+  );
+  border-radius: 2px;
+  cursor: help;
+  flex-shrink: 0;
 }
 </style>

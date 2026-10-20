@@ -326,16 +326,81 @@ def _to_uint8(arr: np.ndarray) -> np.ndarray:
 
 
 def true_color_png(bands: dict[str, np.ndarray]) -> bytes:
-    """B04/B03/B02 → RGB PNG 字节"""
-    r = _to_uint8(bands["B04"])
-    g = _to_uint8(bands["B03"])
-    b = _to_uint8(bands["B02"])
-    rgb = np.dstack([r, g, b]).astype(np.uint8)
-    # 用 PIL 编码 PNG（rasterio 自带 PIL 依赖链可能不全，这里手写最小 PNG 依赖）
+    """B04/B03/B02 → RGB PNG 字节（真彩色，兼容旧调用）"""
+    return composite_png(bands, "TRUE_COLOR")
+
+
+# 波段组合定义：combo -> (红通道波段, 绿通道波段, 蓝通道波段)
+# 依据：不同波段组合能凸显不同地物，是遥感判读的基本手段
+COMPOSITES = {
+    # 真彩色：接近人眼所见，用于整体判读
+    "TRUE_COLOR": ("B04", "B03", "B02"),
+    # 标准假彩色（近红外进红通道）：健康植被显红色，最常用于识别植被覆盖
+    "FALSE_COLOR": ("B08", "B04", "B03"),
+    # 短波红外组合：水体极暗、裸岩/扰动区偏亮，适合看水体与裸地
+    "SWIR": ("B11", "B08", "B04"),
+    # 城市/裸地组合：建筑与裸土呈青灰，植被偏绿
+    "URBAN": ("B11", "B03", "B02"),
+}
+
+# NDVI 伪彩色带（绿→黄→红），用于直观看植被长势
+_NDVI_RAMP = [
+    (0.00, (0x8B, 0x45, 0x13)),   # 棕：裸地
+    (0.20, (0xD9, 0x77, 0x06)),   # 橙：稀疏
+    (0.40, (0xEA, 0xDC, 0x00)),   # 黄：中等
+    (0.60, (0x7C, 0xC8, 0x4C)),   # 浅绿：较好
+    (0.80, (0x1D, 0x9E, 0x75)),   # 深绿：茂密
+]
+
+
+def composite_png(bands: dict[str, np.ndarray], combo: str = "TRUE_COLOR") -> bytes:
+    """按波段组合渲染 RGB PNG 字节。
+
+    - 常规组合：取三个波段做 2%~98% 拉伸后合成 RGB
+    - NDVI：算归一化植被指数，再按色带映射（绿→黄→红直观反映长势）
+    """
     from PIL import Image
+
+    if combo == "NDVI":
+        if "B08" not in bands or "B04" not in bands:
+            raise KeyError("NDVI 需要 B08/B04 波段")
+        idx = _norm(bands["B08"], bands["B04"])   # -1 ~ 1
+        rgb = _ndvi_to_rgb(idx)
+    else:
+        r_band, g_band, b_band = COMPOSITES.get(combo, COMPOSITES["TRUE_COLOR"])
+        missing = [b for b in (r_band, g_band, b_band) if b not in bands]
+        if missing:
+            raise KeyError(f"波段组合 {combo} 缺少波段: {missing}")
+        r = _to_uint8(bands[r_band])
+        g = _to_uint8(bands[g_band])
+        b = _to_uint8(bands[b_band])
+        rgb = np.dstack([r, g, b]).astype(np.uint8)
+
     buf = io.BytesIO()
     Image.fromarray(rgb).save(buf, format="PNG")
     return buf.getvalue()
+
+
+def _ndvi_to_rgb(idx: np.ndarray) -> np.ndarray:
+    """NDVI (-1~1) → RGB，用分段线性插值套色带"""
+    h, w = idx.shape
+    rgb = np.zeros((h, w, 3), dtype=np.float32)
+    v = np.clip(idx.astype(np.float32), 0.0, 0.8)
+    for i in range(len(_NDVI_RAMP) - 1):
+        lo, c_lo = _NDVI_RAMP[i]
+        hi, c_hi = _NDVI_RAMP[i + 1]
+        seg = (v >= lo) & (v <= hi)
+        if not seg.any():
+            continue
+        t = (v[seg] - lo) / (hi - lo) if hi > lo else np.zeros(seg.sum(), dtype=np.float32)
+        for ch in range(3):
+            rgb[..., ch][seg] = c_lo[ch] + (c_hi[ch] - c_lo[ch]) * t
+    # 超出上限（>0.8）取最深绿
+    over = v >= _NDVI_RAMP[-1][0]
+    if over.any():
+        for ch in range(3):
+            rgb[..., ch][over] = _NDVI_RAMP[-1][1][ch]
+    return np.clip(rgb, 0, 255).astype(np.uint8)
 
 
 def _norm(a: np.ndarray, b: np.ndarray) -> np.ndarray:
