@@ -73,14 +73,19 @@
         <el-form-item label="负责人">
           <el-input v-model="mineInfo.manager" placeholder="如：张三" />
         </el-form-item>
-        <el-form-item label="安全评估">
-          <div>
+        <!-- 不用 el-form-item 的 label：内部只有单个复选框时，form-item 会生成
+             <label for="id"> 指向一个并不存在的 input id（Element Plus 的
+             checkbox 在 form-item 上下文里不落地自己的 id），浏览器会报
+             "Incorrect use of <label for=FORM_ELEMENT>"。改用普通行布局规避。 -->
+        <div class="fi-row">
+          <div class="fi-lbl">安全评估</div>
+          <div class="fi-ctl">
             <el-checkbox v-model="includeSafety">
               包含安全风险评估章节（五维评分 + 越界检测 + 热点清单）
             </el-checkbox>
             <div class="include-hint">勾选后生成前会实时跑一次评估，约需 10–30 秒</div>
           </div>
-        </el-form-item>
+        </div>
       </el-form>
 
       <div class="gen-row">
@@ -363,4 +368,11 @@ onMounted(() => {
   max-width: 520px;
   margin-bottom: 12px;
 }
+/* 自定义表单行：绕开 el-form-item 的 label-for 自动关联 */
+.fi-row { display: flex; margin-bottom: 18px; font-size: 14px; }
+.fi-lbl {
+  width: 90px; flex-shrink: 0; text-align: right; padding-right: 12px;
+  color: var(--el-text-color-regular); line-height: 32px;
+}
+.fi-ctl { flex: 1; min-width: 0; }
 </style>

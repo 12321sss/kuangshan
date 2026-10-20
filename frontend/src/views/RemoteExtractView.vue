@@ -183,17 +183,26 @@
                   <el-option :value="12" label="每 12 个月（按年）" />
                 </el-select>
               </el-form-item>
-              <el-form-item label="地物类型">
-                <el-checkbox-group v-model="batchTypes" size="small">
-                  <el-checkbox v-for="c in classOptions" :key="c.value" :value="c.value" :label="c.value">
-                    {{ c.label }}
-                  </el-checkbox>
-                </el-checkbox-group>
-              </el-form-item>
-              <el-form-item label="自动入库">
-                <el-switch v-model="batchAutoSave" size="small" />
-                <span class="threshold-hint" style="margin-left:6px">保存后才能进时序/报告</span>
-              </el-form-item>
+              <!-- 这两项内部不是「单一可关联输入」，用 el-form-item 的 label 会生成
+                   指向不存在 id 的 <label for>，浏览器报 Incorrect use of <label>。
+                   改用自定义行布局。 -->
+              <div class="fi-row">
+                <div class="fi-lbl">地物类型</div>
+                <div class="fi-ctl">
+                  <el-checkbox-group v-model="batchTypes" size="small">
+                    <el-checkbox v-for="c in classOptions" :key="c.value" :value="c.value">
+                      {{ c.label }}
+                    </el-checkbox>
+                  </el-checkbox-group>
+                </div>
+              </div>
+              <div class="fi-row">
+                <div class="fi-lbl">自动入库</div>
+                <div class="fi-ctl" style="display:flex;align-items:center">
+                  <el-switch v-model="batchAutoSave" size="small" />
+                  <span class="threshold-hint" style="margin-left:6px">保存后才能进时序/报告</span>
+                </div>
+              </div>
               <el-button
                 type="warning"
                 style="width:100%"
@@ -2207,4 +2216,11 @@ function ringAreaHa(ring: number[][]): number {
   font-size: 10px; color: #0d9488; background: #f0fdfa;
   border: 1px solid #b2e8e0; border-radius: 3px; padding: 1px 5px;
 }
+/* 自定义表单行：绕开 el-form-item 的 label-for 自动关联 */
+.fi-row { display: flex; margin-bottom: 16px; font-size: 13px; }
+.fi-lbl {
+  width: 72px; flex-shrink: 0; text-align: right; padding-right: 12px;
+  color: var(--el-text-color-regular); line-height: 28px;
+}
+.fi-ctl { flex: 1; min-width: 0; }
 </style>
