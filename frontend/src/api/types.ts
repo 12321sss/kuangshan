@@ -321,3 +321,73 @@ export interface ChangeSummary {
   classes: Array<{ classType: string; totalAreaHa: number; recordCount: number }>
   note: string
 }
+
+// ============================================================
+// 开采安全风险评估
+// ============================================================
+
+/** 单个风险维度（含分项得分、证据与建议） */
+export interface SafetyDimension {
+  key: string
+  label: string
+  weight: number
+  score: number
+  weighted: number
+  /** 数据可信度：期数/地形数据充足度决定 */
+  confidence: 'low' | 'medium' | 'high'
+  /** 支撑该评分的具体数值（如「陡坡占比 12.3%」） */
+  evidence: string[]
+  advice: string
+}
+
+/** 风险热点：栅格风险超过阈值的连片区域 */
+export interface SafetyHotspot {
+  lng: number
+  lat: number
+  areaHa: number
+  score: number
+  maxScore: number
+  pixelCount: number
+}
+
+/** 安全评估完整结果 */
+export interface SafetyEvaluation {
+  available: boolean
+  message?: string
+  projectName?: string
+  recordCount?: number
+  generatedAt?: string
+  score?: {
+    total: number
+    level: string
+    color: string
+    dimensions: SafetyDimension[]
+  }
+  encroachment?: {
+    available: boolean
+    areaHa: number
+    pctOfDisturbance: number
+    permitAreaHa?: number
+    note?: string
+  }
+  terrain?: Record<string, any>
+  areaSummary?: {
+    aoiHa: number
+    disturbanceHa: number
+    byClass: Record<string, number>
+    sumOfClassesHa?: number
+    note: string
+    /** 面积自检：各类之和明显超过分析区时给出提示 */
+    check?: string | null
+  }
+  trend?: Record<string, any>
+  hotspots?: SafetyHotspot[]
+  /** 热点阈值（自适应：整体风险偏低时退到 P90 相对阈值） */
+  hotspotThreshold?: number
+  riskImageBase64?: string
+  levelStats?: Array<{ label: string; color: string; pct: number }>
+  legend?: Array<{ label: string; color: string }>
+  grid?: { width: number; height: number; mPerPixel: number; zoom: number }
+  gridError?: string
+  disclaimer?: string
+}

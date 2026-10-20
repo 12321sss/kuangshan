@@ -242,6 +242,7 @@ const moduleMenus: Record<string, MenuGroup[]> = {
     title: '报告中心',
     items: [
       { path: '/analysis', title: '数据分析', perm: 'page:analysis' },
+      { path: '/analysis/safety', title: '安全评估', perm: 'page:analysis' },
       { path: '/report', title: '报告生成', perm: 'page:analysis' }
     ]
   }],

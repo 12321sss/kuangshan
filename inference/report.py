@@ -119,17 +119,97 @@ def generate_report(data: dict) -> bytes:
             cells[3].text = f"{f.get('upperHa', 0) / 100:.2f}"
         _add_note(doc, "注：趋势外推非实测结果，实际扩张速率受采矿计划、地形与政策等因素影响。")
 
-    # ---- 五、传感器监测概况 ----
-    _add_heading(doc, "五、传感器监测概况", level=1)
+    # ---- 五、安全风险评估（多因子融合）----
+    safety = data.get("safety")
+    if safety and safety.get("available") and safety.get("score"):
+        _add_safety_section(doc, safety)
+
+    # ---- 六、传感器监测概况 ----
+    _add_heading(doc, "六、传感器监测概况", level=1)
     _add_kv(doc, "在线设备数", str(data.get("sensorOnline", 0)))
     _add_kv(doc, "未处理告警数", str(data.get("sensorAlarm", 0)))
 
-    # ---- 六、结论与口径说明 ----
-    _add_heading(doc, "六、结论与口径说明", level=1)
+    # ---- 七、结论与口径说明 ----
+    _add_heading(doc, "七、结论与口径说明", level=1)
     doc.add_paragraph("本报告输出为「潜在水土流失风险筛查」，非实测侵蚀量。")
     doc.add_paragraph("「持续复绿」仅表示植被覆盖度回升，不等于生态修复成功。")
+    if safety and safety.get("available"):
+        doc.add_paragraph(
+            "安全风险评估输出为「潜在安全风险筛查」，不构成边坡稳定性评价，不给出安全系数；"
+            "岩土参数、地下水与结构面条件需现场勘察，安全生产决策须以有资质单位的专项评估为准。"
+        )
     _add_note(doc, "本报告由智慧矿山平台自动生成，数据可追溯到每次解译记录。")
 
     buf = io.BytesIO()
     doc.save(buf)
     return buf.getvalue()
+
+
+def _add_safety_section(doc: Document, safety: dict) -> None:
+    """安全风险评估章节
+
+    设计原则：不只给总分，必须把「每一维的实测数值 + 建议」写进报告，
+    否则报告无法支撑现场核查，也无法在质询时说明结论来源。
+    """
+    score = safety["score"]
+    _add_heading(doc, "五、开采安全风险评估", level=1)
+
+    _add_kv(doc, "综合风险分", f"{score.get('total')} / 100（{score.get('level')}风险）")
+    if safety.get("projectName"):
+        _add_kv(doc, "评估项目", str(safety["projectName"]))
+    if safety.get("recordCount"):
+        _add_kv(doc, "参与评估记录数", str(safety["recordCount"]))
+
+    # 五维评分表
+    dims = score.get("dimensions") or []
+    if dims:
+        doc.add_paragraph("各维度得分（加权后构成综合风险分）：")
+        table = doc.add_table(rows=1, cols=4)
+        table.style = "Light Grid Accent 1"
+        head = table.rows[0].cells
+        head[0].text = "维度"
+        head[1].text = "得分"
+        head[2].text = "权重"
+        head[3].text = "加权得分"
+        for d in dims:
+            cells = table.add_row().cells
+            cells[0].text = str(d.get("label", ""))
+            cells[1].text = str(d.get("score", ""))
+            cells[2].text = f"{round(float(d.get('weight', 0)) * 100)}%"
+            cells[3].text = str(d.get("weighted", ""))
+
+    # 逐维度依据
+    for d in dims:
+        doc.add_paragraph(f"【{d.get('label')}】得分 {d.get('score')}，数据可信度 {d.get('confidence', 'medium')}")
+        for e in (d.get("evidence") or []):
+            doc.add_paragraph(str(e), style="List Bullet")
+        if d.get("advice"):
+            _add_note(doc, f"建议：{d['advice']}")
+
+    # 越界结论
+    enc = safety.get("encroachment") or {}
+    if enc.get("available"):
+        doc.add_paragraph("越界开采检测：")
+        _add_kv(doc, "越界面积", f"{enc.get('areaHa')} ha")
+        _add_kv(doc, "占扰动总面积", f"{enc.get('pctOfDisturbance')}%")
+        if (enc.get("areaHa") or 0) > 0:
+            _add_note(doc, "检测到扰动范围超出登记矿权边界，需先排除解译边界误差与边界日期不一致，"
+                          "再核对采矿许可范围；确认越界属重大事项，应按管理规定上报。")
+        else:
+            _add_note(doc, "扰动范围未超出登记矿权边界（基于本次解译结果与当前矿权边界）。")
+
+    # 热点清单
+    hotspots = safety.get("hotspots") or []
+    if hotspots:
+        doc.add_paragraph(f"风险热点（前 {min(len(hotspots), 5)} 处，按风险分×面积排序）：")
+        for i, h in enumerate(hotspots[:5], 1):
+            doc.add_paragraph(
+                f"{i}. 位置 {h.get('lng')}, {h.get('lat')}，面积 {h.get('areaHa')} ha，"
+                f"平均风险分 {h.get('score')}（峰值 {h.get('maxScore')}）",
+                style="List Number"
+            )
+    else:
+        _add_note(doc, "本次未发现超过阈值的连片高风险区域。")
+
+    _add_note(doc, str(safety.get("disclaimer") or ""))
+

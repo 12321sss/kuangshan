@@ -30,6 +30,7 @@ const router = createRouter({
         { path: 'remote-extract', name: 'remote-extract', component: () => import('@/views/RemoteExtractView.vue'), meta: { title: '遥感提取', module: 'rs', perm: 'page:extract' } },
         { path: 'extract', name: 'extract', component: () => import('@/views/ExtractView.vue'), meta: { title: '影像解译', module: 'rs', perm: 'page:extract' } },
         { path: 'analysis', name: 'analysis', component: () => import('@/views/AnalysisView.vue'), meta: { title: '变化分析', module: 'report', perm: 'page:analysis' } },
+        { path: 'analysis/safety', name: 'analysis-safety', component: () => import('@/views/SafetyView.vue'), meta: { title: '安全评估', module: 'report', perm: 'page:analysis' } },
         { path: 'report', name: 'report', component: () => import('@/views/ReportView.vue'), meta: { title: '报告生成', module: 'report', perm: 'page:analysis' } },
         { path: 'platform/projects', name: 'platform-projects', component: () => import('@/views/ProjectsView.vue'), meta: { title: '项目管理', module: 'platform', perm: 'page:projects' } },
         { path: 'platform/users', name: 'platform-users', component: () => import('@/views/UsersView.vue'), meta: { title: '用户中心', module: 'platform', perm: 'page:users' } },

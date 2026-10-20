@@ -923,6 +923,47 @@ def terrain_analyze(req: TerrainRequest):
 
 
 # ---------------------------------------------------------------------------
+# 开采安全风险评估（多因子融合）
+# ---------------------------------------------------------------------------
+import risk as risk_mod  # noqa: E402
+
+
+class RiskRequest(BaseModel):
+    model_config = {"populate_by_name": True}
+
+    aoi: list[list[float]] = Field(..., description="分析区环 [[lng,lat],...]")
+    permitBoundary: list[list[float]] | None = Field(
+        None, alias="permitBoundary", description="矿权边界（用于越界检测）")
+    classes: list[dict] = Field(default_factory=list,
+                                description='[{"classType":"PIT","features":[GeoJSON Feature...]}]')
+    trend: dict | None = Field(None, description="扩张速率等时序趋势")
+    withGrid: bool = Field(True, alias="withGrid", description="是否生成风险栅格图与热点")
+    zoom: int = Field(14, description="DEM 放大级别")
+
+
+@app.post("/api/v1/risk/evaluate")
+def risk_evaluate(req: RiskRequest):
+    """开采安全风险评估：五维评分 + 风险分级图 + 热点清单
+
+    口径：潜在安全风险筛查，不是边坡稳定性评价，不给安全系数。
+    """
+    try:
+        data = risk_mod.evaluate({
+            "aoi": req.aoi,
+            "permitBoundary": req.permitBoundary,
+            "classes": req.classes,
+            "trend": req.trend,
+            "withGrid": req.withGrid,
+            "zoom": max(10, min(req.zoom, 15)),
+        })
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail=f"风险评估失败: {e}") from e
+    return {"code": 0, "message": "success", "data": data}
+
+
+# ---------------------------------------------------------------------------
 # 报告生成（S4）：基于数据库真实统计生成 Word 报告
 # ---------------------------------------------------------------------------
 import report as report_gen  # noqa: E402
@@ -937,6 +978,9 @@ class ReportRequest(BaseModel):
     forecast: dict = {}
     sensorOnline: int = 0
     sensorAlarm: int = 0
+    # 安全风险评估结果（可选）：传入则报告增加「五、开采安全风险评估」章节
+    # 注意：字段必须显式声明，Pydantic 会丢弃未声明字段，漏写会导致章节静默消失
+    safety: dict | None = None
 
 
 @app.post("/api/v1/report/generate")

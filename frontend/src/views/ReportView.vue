@@ -73,6 +73,14 @@
         <el-form-item label="负责人">
           <el-input v-model="mineInfo.manager" placeholder="如：张三" />
         </el-form-item>
+        <el-form-item label="安全评估">
+          <div>
+            <el-checkbox v-model="includeSafety">
+              包含安全风险评估章节（五维评分 + 越界检测 + 热点清单）
+            </el-checkbox>
+            <div class="include-hint">勾选后生成前会实时跑一次评估，约需 10–30 秒</div>
+          </div>
+        </el-form-item>
       </el-form>
 
       <div class="gen-row">
@@ -150,6 +158,8 @@ interface ReportHistoryItem {
   manager: string
 }
 const reportHistory = ref<ReportHistoryItem[]>([])
+/** 是否在报告中包含安全风险评估章节 */
+const includeSafety = ref(false)
 
 const TEMPLATE_LABEL: Record<string, string> = { default: '标准版', simple: '简洁版', detailed: '详细版' }
 
@@ -192,13 +202,29 @@ async function loadData() {
 
 /** 实际生成并下载 docx（复用下载逻辑） */
 async function downloadReport(projectName: string): Promise<void> {
+  // 勾选时先生成安全评估（含 DEM 读取，约 10-30 秒），把结果并入报告
+  let safety: any = null
+  if (includeSafety.value) {
+    try {
+      safety = await analysisApi.safetyEvaluate(projectStore.currentId ?? undefined, true)
+      if (!safety?.available) {
+        ElMessage.warning('安全评估数据不足，报告将不包含该章节')
+        safety = null
+      }
+    } catch (e: any) {
+      ElMessage.warning('安全评估失败，报告将不包含该章节：' + (e.message || ''))
+      safety = null
+    }
+  }
+
   const res = await reportApi.generate({
     projectName,
     timeseries: series.value,
     summary: summary.value.classes,
     forecast: forecast.value || {},
     sensorOnline: sensorOnline.value,
-    sensorAlarm: sensorAlarm.value
+    sensorAlarm: sensorAlarm.value,
+    safety
   })
   const byteChars = atob(res.docx_base64)
   const bytes = new Uint8Array(byteChars.length)
@@ -270,6 +296,7 @@ onMounted(() => {
 </script>
 
 <style scoped>
+.include-hint { font-size: 11px; color: #a9aeb8; line-height: 1.6; margin-top: 2px; }
 .notice {
   margin-bottom: 12px;
 }

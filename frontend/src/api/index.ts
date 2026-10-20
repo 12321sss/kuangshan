@@ -1,8 +1,8 @@
 import http from './http'
 import type {
   AdminUser, Alarm, AreaTimeseriesResult, CrsOption, DisplacementSeries, Extraction, Imagery,
-  InterpretTask, OverviewStats, PermCatalog, PitForecast, PitYearly, Project, Role, SceneItem,
-  ScreenSummary, Sensor, SensorDataPoint, Station, TimeSeriesFrame, TimeSeriesGroup,
+  InterpretTask, OverviewStats, PermCatalog, PitForecast, PitYearly, Project, Role, SafetyEvaluation,
+  SceneItem, ScreenSummary, Sensor, SensorDataPoint, Station, TimeSeriesFrame, TimeSeriesGroup,
   VegetationYearly, WarningRule
 } from './types'
 
@@ -109,6 +109,20 @@ export const analysisApi = {
     }>
     timeline: Array<{ date: string; totalAreaHa: number; changeHa: number }>
   }> => http.get('/analysis/aoi-profile', { params: { projectId, signature } }),
+
+  /**
+   * 开采安全风险评估（五维评分 + 风险分级图 + 热点清单）
+   * 口径：潜在安全风险筛查，不是边坡稳定性评价，不给安全系数
+   */
+  safetyEvaluate: (projectId?: number, withGrid = true): Promise<SafetyEvaluation> =>
+    http.post('/analysis/safety-evaluate', null, {
+      params: { projectId, withGrid },
+      timeout: 240000
+    }),
+
+  /** 安全评估元信息（可用记录数提示） */
+  safetyMeta: (projectId?: number): Promise<{ recordCount: number; hint: string }> =>
+    http.get('/analysis/safety-latest-meta', { params: { projectId } }),
   /** @deprecated 旧硬编码接口已随 AnalysisController 重写移除 */
   pitYearlyOld: (projectId?: number): Promise<PitYearly[]> =>
     http.get('/analysis/pit-yearly', { params: { projectId } }),
