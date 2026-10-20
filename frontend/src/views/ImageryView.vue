@@ -1,0 +1,906 @@
+<template>
+  <div class="imagery-page">
+    <!-- 左侧：Cesium 地图 -->
+    <div class="map-wrap">
+      <div ref="cesiumRef" class="cesium-container"></div>
+
+      <div class="map-toolbar">
+        <el-button-group>
+          <el-button size="small" @click="flyToMine">定位矿区</el-button>
+          <el-button size="small" :type="drawing ? 'primary' : 'default'" @click="toggleDraw">
+            {{ drawing ? '圈选中（右键结束）' : '绘制影像范围' }}
+          </el-button>
+          <el-button size="small" :disabled="draftBounds.length < 4" @click="clearDraft">
+            清除范围
+          </el-button>
+        </el-button-group>
+        <span v-if="draftBounds.length >= 4" class="draft-info">
+          范围已绘制（{{ areaText }} km²）· CRS {{ form.crs }}
+        </span>
+      </div>
+
+      <!-- 首次进入时的操作指引，避免不知道往哪圈 -->
+      <div v-if="showGuide" class="guide-tip">
+        <div class="guide-title">怎么圈影像范围</div>
+        <ol class="guide-list">
+          <li>先点<b>「定位矿区」</b>飞到矿区上空（宁都河源）</li>
+          <li>如果影像就在矿区附近 → 直接点<b>「绘制影像范围」</b>，在地图上沿影像边缘点几下，右键结束</li>
+          <li>不知道具体位置 → 切到<b>「检索公开数据」</b>，输入经纬度检索，点场景卡片会自动飞到影像范围</li>
+        </ol>
+        <button class="guide-close" @click="showGuide = false">知道了</button>
+      </div>
+
+      <!-- 影像 footprint 列表 -->
+      <div class="imagery-overlay">
+        <div class="overlay-title">影像覆盖范围（{{ imagery.length }}）</div>
+        <div v-if="!imagery.length" class="overlay-empty">影像库暂无数据</div>
+        <div
+          v-for="img in imagery"
+          :key="img.id"
+          class="overlay-item"
+          :class="{ active: selectedId === img.id }"
+          @click="flyTo(img)"
+        >
+          <span class="dot" :class="img.source.toLowerCase()"></span>
+          <div class="meta">
+            <div class="name">{{ img.name }}</div>
+            <div class="sub">
+              {{ img.acquisitionDate }}
+              <template v-if="img.cloudCover !== null && img.cloudCover !== undefined">
+                · 云量 {{ img.cloudCover.toFixed(1) }}%
+              </template>
+              · {{ img.crs }}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div v-if="!hasToken" class="token-notice">未配置天地图密钥，底图未加载</div>
+    </div>
+
+    <!-- 右侧面板 -->
+    <div class="side">
+      <el-card shadow="never" class="side-card">
+        <el-tabs v-model="activeTab">
+          <!-- ============ 上传高分影像 ============ -->
+          <el-tab-pane label="上传影像" name="upload">
+            <el-form label-width="92px" size="small">
+              <el-form-item label="影像文件" required>
+                <input
+                  ref="fileInput"
+                  type="file"
+                  accept=".tif,.tiff,.TIF,.TIFF"
+                  class="file-input"
+                  @change="onFileChange"
+                />
+              </el-form-item>
+
+              <el-form-item label="显示名称">
+                <el-input v-model="form.name" placeholder="默认用原文件名" clearable />
+              </el-form-item>
+
+              <!-- 坐标系：上传时由用户选择（原样记录，不猜测） -->
+              <el-form-item label="坐标系" required>
+                <el-select v-model="form.crs" placeholder="请选择影像坐标系" style="width: 100%">
+                  <el-option
+                    v-for="c in crsOptions"
+                    :key="c.code"
+                    :value="c.label"
+                    :label="`${c.name}（${c.label}）`"
+                  />
+                </el-select>
+              </el-form-item>
+              <el-alert
+                type="info"
+                :closable="false"
+                show-icon
+                title="高分影像常见为 UTM 投影或 CGCS2000，选错会导致地图定位到几内亚湾"
+                class="crs-tip"
+              />
+
+              <el-form-item label="拍摄日期" required>
+                <el-date-picker
+                  v-model="form.acquisitionDate"
+                  type="date"
+                  value-format="YYYY-MM-DD"
+                  placeholder="选择日期"
+                  style="width: 100%"
+                />
+              </el-form-item>
+
+              <el-form-item label="分辨率">
+                <el-select v-model="form.resolutionM" style="width: 100%">
+                  <el-option :value="0.8" label="0.8 m（高分二号等）" />
+                  <el-option :value="2" label="2 m" />
+                  <el-option :value="10" label="10 m（Sentinel-2）" />
+                  <el-option :value="30" label="30 m（Landsat）" />
+                </el-select>
+              </el-form-item>
+
+              <el-form-item label="数据源">
+                <el-select v-model="form.source" style="width: 100%">
+                  <el-option value="GF2" label="高分二号（GF-2）" />
+                  <el-option value="GF7" label="高分七号（GF-7）" />
+                </el-select>
+              </el-form-item>
+
+              <el-alert
+                v-if="draftBounds.length < 4"
+                type="warning"
+                :closable="false"
+                show-icon
+                title="请先在地图上点击「绘制影像范围」标出影像覆盖范围"
+                class="crs-tip"
+              />
+              <el-form-item>
+                <el-button
+                  type="primary"
+                  :loading="uploading"
+                  :disabled="!form.file || !form.acquisitionDate || draftBounds.length < 4"
+                  @click="doUpload"
+                >
+                  上传并入库
+                </el-button>
+              </el-form-item>
+            </el-form>
+          </el-tab-pane>
+
+          <!-- ============ 检索公开数据 ============ -->
+          <el-tab-pane label="检索公开数据" name="search">
+            <el-form label-width="92px" size="small">
+              <el-form-item label="中心经度">
+                <el-input-number v-model="searchForm.lng" :precision="4" :step="0.01" style="width: 100%" />
+              </el-form-item>
+              <el-form-item label="中心纬度">
+                <el-input-number v-model="searchForm.lat" :precision="4" :step="0.01" style="width: 100%" />
+              </el-form-item>
+              <el-form-item label="时间范围">
+                <el-date-picker
+                  v-model="searchRange"
+                  type="daterange"
+                  value-format="YYYY-MM-DD"
+                  start-placeholder="开始"
+                  end-placeholder="结束"
+                  style="width: 100%"
+                />
+              </el-form-item>
+              <el-form-item label="最大云量">
+                <el-slider v-model="searchForm.maxCloud" :min="0" :max="100" :step="5" show-input />
+              </el-form-item>
+              <el-form-item>
+                <el-button type="primary" :loading="searching" @click="doSearch">
+                  检索 Sentinel-2 场景
+                </el-button>
+              </el-form-item>
+              <el-alert
+                type="info"
+                :closable="false"
+                show-icon
+                title="数据来自欧空局 Copernicus 公开门户，无需注册。云量越低越适合指数法提取"
+              />
+            </el-form>
+
+            <div v-if="scenes.length" class="scene-list">
+              <div
+                v-for="s in scenes"
+                :key="s.productId"
+                class="scene-item"
+                :class="{ active: previewScene?.productId === s.productId }"
+                @click="previewSceneOnMap(s)"
+              >
+                <div class="scene-head">
+                  <span class="scene-date">{{ s.date }}</span>
+                  <span class="scene-cloud" :class="{ good: s.cloudCover < 10 }">
+                    云量 {{ s.cloudCover.toFixed(1) }}%
+                  </span>
+                </div>
+                <div class="scene-sub">
+                  {{ s.platform }} · 瓦片 {{ s.tileId }} · {{ s.level }} · {{ s.sizeMb }} MB
+                </div>
+              </div>
+              <div class="scene-note">
+                提示：整景约 {{ scenes[0]?.sizeMb }} MB，需服务端按 AOI 裁剪后解译；
+                demo 阶段可先登记到影像库，再在「在线提取」圈选 AOI。
+              </div>
+            </div>
+          </el-tab-pane>
+        </el-tabs>
+      </el-card>
+
+      <!-- 影像库列表 -->
+      <el-card shadow="never" class="side-card">
+        <template #header>
+          <div class="list-header">
+            <span>影像库</span>
+            <el-select v-model="filterSource" size="small" style="width: 130px" @change="loadImagery">
+              <el-option value="" label="全部来源" />
+              <el-option value="UPLOAD" label="上传影像" />
+              <el-option value="SENTINEL2" label="Sentinel-2" />
+            </el-select>
+          </div>
+        </template>
+
+        <el-table :data="sortedImagery" size="small" empty-text="暂无影像" @row-click="onRowClick">
+          <el-table-column label="" width="42">
+            <template #default="{ row }">
+              <!-- 收藏星标：常用影像一键星标，下次排在最前 -->
+              <span class="star" :class="{ on: row.favorite }" @click.stop="toggleFavorite(row)">
+                {{ row.favorite ? '★' : '☆' }}
+              </span>
+            </template>
+          </el-table-column>
+          <el-table-column prop="name" label="名称" min-width="150" show-overflow-tooltip />
+          <el-table-column label="来源" width="96">
+            <template #default="{ row }">
+              <el-tag size="small" :type="row.source === 'UPLOAD' ? 'warning' : 'success'">
+                {{ sourceLabel(row.source) }}
+              </el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column prop="acquisitionDate" label="日期" width="104" />
+          <el-table-column v-if="canManage" label="操作" width="70" fixed="right">
+            <template #default="{ row }">
+              <el-button link type="danger" size="small" @click="removeImagery(row)">删除</el-button>
+            </template>
+          </el-table-column>
+        </el-table>
+
+        <el-alert v-if="selectedId" type="success" :closable="false" show-icon class="selected-tip">
+          <template #title>
+            已选中「{{ selectedName }}」· 到「在线提取」页圈选 AOI 即可开始解译
+          </template>
+        </el-alert>
+      </el-card>
+    </div>
+  </div>
+</template>
+
+<script setup lang="ts">
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { useRouter } from 'vue-router'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import {
+  Viewer, Cartesian3, Color, ImageryLayer, Entity, ScreenSpaceEventHandler,
+  ScreenSpaceEventType, Cartographic, CallbackProperty, PolygonHierarchy,
+  Rectangle, Math as CesiumMath
+} from 'cesium'
+import { extractionApi, imageryApi } from '@/api'
+import { haToKm2 } from '@/utils/format'
+import { tiandituBaseLayers } from '@/map/basemap'
+import { autoAdjustPerformance } from '@/map/perf'
+import { TIANDITU_TOKEN, MINE_CENTER } from '@/config'
+import { useAuthStore } from '@/stores/auth'
+import { useProjectStore } from '@/stores/project'
+import type { Imagery, SceneItem, CrsOption } from '@/api/types'
+
+const router = useRouter()
+const auth = useAuthStore()
+const projectStore = useProjectStore()
+const canManage = computed(() => auth.hasAction('action:imagery-manage'))
+
+const cesiumRef = ref<HTMLDivElement>()
+const hasToken = !!TIANDITU_TOKEN
+const activeTab = ref('upload')
+/** 首次进入显示操作指引 */
+const showGuide = ref(true)
+
+const fileInput = ref<HTMLInputElement>()
+const uploading = ref(false)
+const searching = ref(false)
+const imagery = ref<Imagery[]>([])
+const crsOptions = ref<CrsOption[]>([])
+const filterSource = ref('')
+
+const form = reactive({
+  file: null as File | null,
+  name: '',
+  crs: '',
+  acquisitionDate: null as string | null,
+  resolutionM: 0.8,
+  source: 'GF2'
+})
+
+const searchForm = reactive({ lng: 115.2, lat: 26.3, maxCloud: 15 })
+const searchRange = ref<[string, string] | null>(['2023-01-01', '2023-12-31'])
+const scenes = ref<SceneItem[]>([])
+const previewScene = ref<SceneItem | null>(null)
+
+const selectedId = ref<number | null>(null)
+const selectedName = computed(() =>
+  imagery.value.find((i) => i.id === selectedId.value)?.name || '')
+
+let viewer: Viewer | null = null
+let drawHandler: ScreenSpaceEventHandler | null = null
+const drawing = ref(false)
+const draftPts = ref<number[][]>([])
+/** 草稿范围外接矩形 [w,s,e,n]，上传时随请求提交（统一 WGS84） */
+const draftBounds = ref<number[]>([])
+let draftEntity: Entity | null = null
+let sceneEntity: Entity | null = null
+const footprintEntities = new Map<number, Entity>()
+
+const areaText = computed(() => {
+  const b = draftBounds.value
+  if (b.length < 4) return ''
+  const [w, s, e, n] = b
+  const mLat = 110540
+  const mLng = 111320 * Math.cos((s * Math.PI) / 180)
+  const ha = ((e - w) * mLng) * ((n - s) * mLat) / 10000
+  return (ha / 100).toFixed(2)
+})
+
+// ---------------- Cesium 初始化 ----------------
+
+function initMap() {
+  if (!cesiumRef.value) return
+
+  // 底图：天地图影像 + 注记。tiandituBaseLayers 返回 { base, label } 对象，
+  // 必须解构后包成 ImageryLayer —— 直接对该对象调 forEach 会抛错且底图加载不出来
+  const layers = hasToken
+    ? (() => {
+        const { base, label } = tiandituBaseLayers('img')
+        return [new ImageryLayer(base), new ImageryLayer(label)]
+      })()
+    : []
+
+  viewer = new Viewer(cesiumRef.value, {
+    baseLayer: false,
+    baseLayerPicker: false,
+    geocoder: false,
+    homeButton: false,
+    sceneModePicker: false,
+    navigationHelpButton: false,
+    animation: false,
+    timeline: false,
+    fullscreenButton: false,
+    infoBox: false,
+    selectionIndicator: false,
+    creditContainer: document.createElement('div')
+  })
+  layers.forEach((l) => viewer!.imageryLayers.add(l))
+
+  // 初始视角：斜俯视矿区（4km 高空、俯角 50°），既能看清地物又能感知起伏
+  viewer.camera.setView({
+    destination: Cartesian3.fromDegrees(MINE_CENTER.lng, MINE_CENTER.lat - 0.012, 4000),
+    orientation: { heading: 0, pitch: CesiumMath.toRadians(-50) }
+  })
+  // 低配机帧率不足时自动降渲染精度
+  autoAdjustPerformance(viewer)
+}
+
+onMounted(async () => {
+  initMap()
+  await Promise.all([loadImagery(), loadCrs()])
+})
+
+onBeforeUnmount(() => {
+  drawHandler?.destroy()
+  viewer?.destroy()
+  viewer = null
+})
+
+watch(() => projectStore.currentId, () => loadImagery())
+
+async function loadCrs() {
+  try {
+    crsOptions.value = await imageryApi.crsOptions()
+    if (!form.crs && crsOptions.value.length) {
+      form.crs = crsOptions.value[0].label
+    }
+  } catch {
+    ElMessage.error('坐标系选项加载失败')
+  }
+}
+
+async function loadImagery() {
+  try {
+    imagery.value = await imageryApi.list({
+      projectId: projectStore.currentId ?? undefined,
+      source: filterSource.value || undefined
+    })
+    redrawFootprints()
+  } catch {
+    imagery.value = []
+  }
+}
+
+// ---------------- footprint 上图 ----------------
+
+function rectPolygon(west: number, south: number, east: number, north: number) {
+  return new PolygonHierarchy([
+    Cartesian3.fromDegrees(west, south),
+    Cartesian3.fromDegrees(east, south),
+    Cartesian3.fromDegrees(east, north),
+    Cartesian3.fromDegrees(west, north)
+  ])
+}
+
+function redrawFootprints() {
+  if (!viewer) return
+  footprintEntities.forEach((e) => viewer!.entities.remove(e))
+  footprintEntities.clear()
+  imagery.value.forEach((img) => {
+    const ent = viewer!.entities.add({
+      polygon: {
+        hierarchy: rectPolygon(img.west, img.south, img.east, img.north),
+        material: Color.fromCssColorString('#22d3ee').withAlpha(0.12),
+        outline: true,
+        outlineColor: Color.fromCssColorString('#22d3ee'),
+        height: 0
+      }
+    })
+    footprintEntities.set(img.id, ent)
+  })
+}
+
+function flyTo(img: Imagery) {
+  if (!viewer) return
+  selectedId.value = img.id
+  viewer.camera.flyTo({
+    destination: Rectangle.fromDegrees(img.west, img.south, img.east, img.north),
+    duration: 1.2
+  })
+}
+
+/** 飞到矿区上空：初始视角太高空看不到地物，给一个明确的落点 */
+function flyToMine() {
+  if (!viewer) return
+  viewer.camera.flyTo({
+    destination: Cartesian3.fromDegrees(MINE_CENTER.lng, MINE_CENTER.lat - 0.012, 4000),
+    orientation: { heading: 0, pitch: CesiumMath.toRadians(-50) },
+    duration: 1.5
+  })
+}
+
+function onRowClick(row: Imagery) {
+  flyTo(row)
+}
+
+// ---------------- 绘制影像范围 ----------------
+
+function toggleDraw() {
+  if (drawing.value) {
+    drawing.value = false
+    drawHandler?.destroy()
+    drawHandler = null
+    return
+  }
+  drawing.value = true
+  draftPts.value = []
+  const handler = new ScreenSpaceEventHandler(viewer!.scene.canvas)
+  drawHandler = handler
+
+  // 左侧点击：加顶点。必须用 Cesium 官方事件类型，取字段才是 position；
+  // 自定义 { position } 接口在 RIGHT_CLICK 下取不到值（事件给的是 endPosition），
+  // 会抛 DeveloperError: windowPosition is required
+  handler.setInputAction((e: ScreenSpaceEventHandler.PositionedEvent) => {
+    const pos = viewer?.camera.pickEllipsoid(e.position, viewer.scene.globe.ellipsoid)
+    if (!pos) return
+    const c = Cartographic.fromCartesian(pos)
+    draftPts.value.push([
+      CesiumMath.toDegrees(c.longitude),
+      CesiumMath.toDegrees(c.latitude)
+    ])
+    updateDraft()
+  }, ScreenSpaceEventType.LEFT_CLICK)
+
+  // 右键：结束绘制（RIGHT_CLICK 事件带 endPosition）
+  handler.setInputAction((e: ScreenSpaceEventHandler.MotionEvent) => {
+    const pos = viewer?.camera.pickEllipsoid(e.endPosition, viewer.scene.globe.ellipsoid)
+    if (pos) {
+      const c = Cartographic.fromCartesian(pos)
+      draftPts.value.push([
+        CesiumMath.toDegrees(c.longitude),
+        CesiumMath.toDegrees(c.latitude)
+      ])
+    }
+    updateDraft()
+    drawing.value = false
+    handler.destroy()
+    drawHandler = null
+  }, ScreenSpaceEventType.RIGHT_CLICK)
+}
+
+function updateDraft() {
+  if (!viewer) return
+  if (draftEntity) {
+    viewer.entities.remove(draftEntity)
+    draftEntity = null
+  }
+  const pts = draftPts.value
+  if (pts.length < 3) {
+    draftBounds.value = []
+    return
+  }
+  draftEntity = viewer.entities.add({
+    polygon: {
+      hierarchy: new CallbackProperty(
+        () => new PolygonHierarchy(pts.map((p) => Cartesian3.fromDegrees(p[0], p[1]))),
+        false),
+      material: Color.fromCssColorString('#f59e0b').withAlpha(0.2),
+      outline: true,
+      outlineColor: Color.fromCssColorString('#f59e0b')
+    }
+  })
+  const xs = pts.map((p) => p[0])
+  const ys = pts.map((p) => p[1])
+  draftBounds.value = [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)]
+}
+
+function clearDraft() {
+  draftPts.value = []
+  draftBounds.value = []
+  if (viewer && draftEntity) {
+    viewer.entities.remove(draftEntity)
+    draftEntity = null
+  }
+}
+
+// ---------------- 上传 ----------------
+
+function onFileChange(e: Event) {
+  const input = e.target as HTMLInputElement
+  form.file = input.files?.[0] ?? null
+  if (form.file && !form.name) form.name = form.file.name
+}
+
+async function doUpload() {
+  if (!form.file || !form.acquisitionDate || draftBounds.value.length < 4) return
+  uploading.value = true
+  try {
+    const created = await imageryApi.upload({
+      file: form.file,
+      projectId: projectStore.currentId,
+      name: form.name,
+      crs: form.crs,
+      acquisitionDate: form.acquisitionDate,
+      resolutionM: form.resolutionM,
+      bounds: draftBounds.value
+    })
+    ElMessage.success(`影像已入库：${created.name}，正在进入提取…`)
+    clearDraft()
+    form.file = null
+    if (fileInput.value) fileInput.value.value = ''
+    form.name = ''
+    form.acquisitionDate = null
+    await loadImagery()
+    // 上传后直接跳到提取页并带上影像，省得手动切页面再选一遍
+    goExtract(created.id)
+  } catch (e) {
+    ElMessage.error((e as Error).message || '上传失败')
+  } finally {
+    uploading.value = false
+  }
+}
+
+/** 跳转到在线提取页并自动选中该影像（query 传 id，提取页读取后清掉） */
+function goExtract(imageryId: number) {
+  router.push({ path: '/extract', query: { imageryId: String(imageryId) } })
+}
+
+// ---------------- 公开场景检索 ----------------
+
+async function doSearch() {
+  if (!searchRange.value) {
+    ElMessage.warning('请选择时间范围')
+    return
+  }
+  searching.value = true
+  try {
+    scenes.value = await imageryApi.searchScenes({
+      lng: searchForm.lng,
+      lat: searchForm.lat,
+      start: searchRange.value[0],
+      end: searchRange.value[1],
+      maxCloud: searchForm.maxCloud
+    })
+    if (!scenes.value.length) {
+      ElMessage.warning('该区域该时间段内无满足云量条件的场景')
+    }
+  } catch (e) {
+    ElMessage.error('检索失败：' + ((e as Error).message || '公开数据源不可达'))
+  } finally {
+    searching.value = false
+  }
+}
+
+function previewSceneOnMap(s: SceneItem) {
+  previewScene.value = s
+  if (!viewer) return
+  const [w, so, e, n] = s.bounds
+  viewer.camera.flyTo({
+    destination: Rectangle.fromDegrees(w, so, e, n),
+    duration: 1.2
+  })
+  if (sceneEntity) viewer.entities.remove(sceneEntity)
+  sceneEntity = viewer.entities.add({
+    polygon: {
+      hierarchy: rectPolygon(w, so, e, n),
+      material: Color.fromCssColorString('#f97316').withAlpha(0.18),
+      outline: true,
+      outlineColor: Color.fromCssColorString('#f97316')
+    }
+  })
+}
+
+/**
+ * 删除影像：先查关联解译记录数。
+ * 有数据时提示"一并移入回收站"，避免删完影像留下一堆孤儿解译记录。
+ */
+async function removeImagery(img: Imagery) {
+  try {
+    let related = 0
+    try {
+      related = await extractionApi.countByImagery(img.id)
+    } catch {
+      related = 0
+    }
+    if (related > 0) {
+      await ElMessageBox.confirm(
+        `该影像关联 ${related} 条解译记录。删除影像会把这些解译记录一并移入回收站（可在「回收站」还原）。是否继续？`,
+        '确认删除',
+        { type: 'warning', confirmButtonText: '一并删除', cancelButtonText: '取消' }
+      )
+      await extractionApi.trashByImagery(img.id)
+    } else {
+      await ElMessageBox.confirm('确定删除该影像？', '确认删除', { type: 'warning' })
+    }
+    await imageryApi.remove(img.id)
+    ElMessage.success(related > 0 ? `已删除，${related} 条解译记录已移入回收站` : '已删除')
+    await loadImagery()
+  } catch (e: any) {
+    // 用户取消不算错误
+    if (e === 'cancel' || e?.message === 'cancel') return
+    ElMessage.error(e?.message || '删除失败')
+  }
+}
+
+/** 收藏优先排序：星标影像排最前，其余按日期降序 */
+const sortedImagery = computed(() =>
+  [...imagery.value].sort((a, b) => {
+    const fa = a.favorite ? 1 : 0
+    const fb = b.favorite ? 1 : 0
+    if (fa !== fb) return fb - fa
+    return String(b.acquisitionDate || '').localeCompare(String(a.acquisitionDate || ''))
+  })
+)
+
+/** 切换收藏（星标常用影像） */
+async function toggleFavorite(img: Imagery) {
+  try {
+    const updated = await imageryApi.toggleFavorite(img.id)
+    img.favorite = updated.favorite
+    ElMessage.success(updated.favorite ? '已加入收藏' : '已取消收藏')
+  } catch {
+    ElMessage.error('操作失败')
+  }
+}
+
+function sourceLabel(s: string) {
+  return { UPLOAD: '上传', SENTINEL2: 'Sentinel-2', LANDSAT9: 'Landsat-9', GF2: 'GF-2' }[s] || s
+}
+</script>
+
+<style scoped>
+.star {
+  font-size: 15px; color: #c9cdd4; cursor: pointer;
+  line-height: 1; user-select: none; display: inline-block;
+}
+.star:hover { color: #f59e0b; }
+.star.on { color: #f59e0b; }
+
+.imagery-page {
+  display: flex;
+  height: 100%;
+  gap: 12px;
+  padding: 12px;
+  box-sizing: border-box;
+}
+.map-wrap {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  border-radius: 8px;
+  overflow: hidden;
+  background: #0b1220;
+}
+.cesium-container {
+  width: 100%;
+  height: 100%;
+}
+.map-toolbar {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: rgba(255, 255, 255, 0.92);
+  border-radius: 8px;
+  padding: 8px 10px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+}
+.draft-info {
+  font-size: 12px;
+  color: #0d9488;
+  font-weight: 600;
+}
+.guide-tip {
+  position: absolute;
+  top: 58px;
+  right: 12px;
+  z-index: 6;
+  width: 290px;
+  background: rgba(255, 255, 255, 0.95);
+  border: 1px solid var(--el-color-warning);
+  border-radius: 8px;
+  padding: 12px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+  color: var(--el-text-color-primary);
+}
+.guide-title {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--el-color-warning-dark-2);
+  margin-bottom: 8px;
+}
+.guide-list {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 12px;
+  line-height: 1.8;
+}
+.guide-list b {
+  color: var(--el-color-primary);
+  font-weight: 500;
+}
+.guide-close {
+  margin-top: 10px;
+  width: 100%;
+  padding: 5px;
+  background: var(--el-fill-color-light);
+  color: var(--el-text-color-regular);
+  border: none;
+  border-radius: 4px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.guide-close:hover {
+  background: var(--el-fill-color);
+}
+.imagery-overlay {
+  position: absolute;
+  top: 58px;
+  left: 12px;
+  z-index: 5;
+  width: 250px;
+  max-height: calc(100% - 140px);
+  overflow-y: auto;
+  background: rgba(255, 255, 255, 0.92);
+  border-radius: 8px;
+  padding: 8px 10px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+}
+.overlay-title {
+  font-size: 12px;
+  color: var(--el-text-color-regular);
+  margin-bottom: 6px;
+}
+.overlay-empty {
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
+}
+.overlay-item {
+  display: flex;
+  gap: 8px;
+  padding: 6px;
+  border-radius: 4px;
+  cursor: pointer;
+  color: var(--el-text-color-primary);
+}
+.overlay-item:hover,
+.overlay-item.active {
+  background: rgba(13, 148, 136, 0.12);
+}
+.overlay-item .dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-top: 5px;
+  flex-shrink: 0;
+  background: #22d3ee;
+}
+.overlay-item .dot.upload {
+  background: #f59e0b;
+}
+.overlay-item .meta {
+  min-width: 0;
+}
+.overlay-item .name {
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.overlay-item .sub {
+  font-size: 11px;
+  color: var(--el-text-color-secondary);
+}
+.token-notice {
+  position: absolute;
+  bottom: 12px;
+  left: 12px;
+  font-size: 12px;
+  color: var(--el-color-warning);
+  background: rgba(255, 255, 255, 0.92);
+  padding: 4px 8px;
+  border-radius: 4px;
+}
+.side {
+  width: 380px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  overflow-y: auto;
+}
+.side-card {
+  flex-shrink: 0;
+}
+.file-input {
+  width: 100%;
+  font-size: 12px;
+}
+.crs-tip {
+  margin-bottom: 10px;
+}
+.list-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.scene-list {
+  margin-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.scene-item {
+  border: 1px solid var(--el-border-color);
+  border-radius: 6px;
+  padding: 8px;
+  cursor: pointer;
+}
+.scene-item:hover,
+.scene-item.active {
+  border-color: #f97316;
+  background: rgba(249, 115, 22, 0.08);
+}
+.scene-head {
+  display: flex;
+  justify-content: space-between;
+  font-size: 13px;
+  font-weight: 600;
+}
+.scene-cloud {
+  color: var(--el-color-danger);
+  font-size: 12px;
+}
+.scene-cloud.good {
+  color: var(--el-color-success);
+}
+.scene-sub {
+  font-size: 11px;
+  color: var(--el-text-color-secondary);
+  margin-top: 2px;
+}
+.scene-note {
+  font-size: 11px;
+  color: var(--el-text-color-secondary);
+  line-height: 1.6;
+}
+.selected-tip {
+  margin-top: 10px;
+}
+</style>
