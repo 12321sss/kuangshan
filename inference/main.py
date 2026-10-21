@@ -1021,6 +1021,42 @@ def slope_analyze(req: SlopeRequest):
 
 
 # ---------------------------------------------------------------------------
+# 边界文件导入（docs/12 阶段一）：SHP / GeoJSON / KML → 统一 AOI 环
+# ---------------------------------------------------------------------------
+import base64 as _b64
+import aoi_import as aoi_mod  # noqa: E402
+
+
+class AoiImportRequest(BaseModel):
+    filename: str = Field(..., description="原始文件名，用于判断格式")
+    contentBase64: str = Field(..., description="文件二进制内容的 base64")
+
+
+@app.post("/api/v1/aoi/import")
+def aoi_import(req: AoiImportRequest):
+    """解析客户给的边界文件，输出 WGS84 经纬度环 + 面积 + 坐标系说明
+
+    注意：转换失败的坐标系一律报错，不做兜底猜测——偏几百米的边界比报错危险得多。
+    """
+    try:
+        raw = _b64.b64decode(req.contentBase64)
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(status_code=400, detail=f"文件内容不是合法 base64: {e}") from e
+
+    if len(raw) > 40 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="文件超过 40MB，请先裁剪或简化边界")
+
+    try:
+        data = aoi_mod.import_boundary(req.filename, raw)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail=f"边界解析失败: {e}") from e
+
+    return {"code": 0, "message": "success", "data": data}
+
+
+# ---------------------------------------------------------------------------
 # 报告生成（S4）：基于数据库真实统计生成 Word 报告
 # ---------------------------------------------------------------------------
 import report as report_gen  # noqa: E402

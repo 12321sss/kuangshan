@@ -369,3 +369,63 @@ export const aoiWatchApi = {
     significant?: boolean
   }> => http.post(`/aoi-watch/${id}/check`)
 }
+
+// ============================================================
+// 边界管理（客户 SHP/GeoJSON/KML 导入当 AOI）
+// ============================================================
+
+export interface AoiBoundaryItem {
+  id: number
+  projectId: number
+  name: string
+  /** PERMIT 矿权范围 / DISTURBANCE 实际扰动边界 / ECO 生态缓冲区 */
+  boundaryType: 'PERMIT' | 'DISTURBANCE' | 'ECO'
+  areaHa: number
+  vertexCount: number
+  sourceFormat?: string
+  sourceCrs?: string
+  sourceFile?: string
+  /** 解析时的提示：缺 .prj、按 WGS84 假定等，要如实展示 */
+  warnings?: string
+  createdBy?: string
+  createdAt?: string
+  /** 仅详情接口返回 */
+  geometry?: { outer: number[][]; holes?: number[][][] }
+}
+
+export const boundaryApi = {
+  list: (projectId: number, type?: string): Promise<AoiBoundaryItem[]> =>
+    http.get('/aoi-boundaries', { params: { projectId, type } }),
+
+  get: (id: number): Promise<AoiBoundaryItem> => http.get(`/aoi-boundaries/${id}`),
+
+  /** 项目边界概况：越界检测有没有基准可用 */
+  summary: (projectId: number): Promise<{
+    total: number
+    permit: number
+    disturbance: number
+    eco: number
+    permitAreaHa: number
+    encroachReady: boolean
+    hint: string
+  }> => http.get('/aoi-boundaries/summary', { params: { projectId } }),
+
+  /** 导入边界文件（内容走 base64，避免 multipart 多层转发） */
+  importFile: (req: {
+    projectId: number
+    boundaryType: 'PERMIT' | 'DISTURBANCE' | 'ECO'
+    filename: string
+    contentBase64: string
+    name?: string
+    merge?: boolean
+  }): Promise<{
+    saved: AoiBoundaryItem[]
+    count: number
+    sourceFormat: string
+    sourceCrs: string
+    warnings: string
+    boundaryType: string
+  }> => http.post('/aoi-boundaries/import', req, { timeout: 180000 }),
+
+  remove: (id: number): Promise<void> => http.delete(`/aoi-boundaries/${id}`)
+}

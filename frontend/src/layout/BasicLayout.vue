@@ -106,16 +106,24 @@
       <!-- 左侧菜单：随顶部模块切换，按页面权限过滤；可折叠 -->
       <aside class="sidebar" :class="{ collapsed: sidebarCollapsed }">
         <div v-for="group in currentGroups" :key="group.title" class="menu-group">
-          <div class="group-title">{{ group.title }}</div>
-          <div
-            v-for="item in group.items"
-            :key="item.path"
-            class="menu-item"
-            :class="{ active: route.path === item.path }"
-            @click="goPage(item)"
-          >
-            {{ item.title }}
+          <!-- 分组标题可点击折叠：组多的模块（报告中心 3 组）收起后一屏能看全 -->
+          <div class="group-title" @click="toggleGroup(group.title)">
+            <span>{{ group.title }}</span>
+            <el-icon class="gi-arrow" :class="{ closed: isGroupClosed(group.title) }">
+              <ArrowDown />
+            </el-icon>
           </div>
+          <template v-if="!isGroupClosed(group.title)">
+            <div
+              v-for="item in group.items"
+              :key="item.path"
+              class="menu-item"
+              :class="{ active: route.path === item.path }"
+              @click="goPage(item)"
+            >
+              {{ item.title }}
+            </div>
+          </template>
         </div>
         <!-- 折叠按钮：收起侧边栏，给内容区腾空间 -->
         <div class="sidebar-collapse" @click="sidebarCollapsed = true">
@@ -184,7 +192,7 @@ import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
   Odometer, Monitor, Bell, Tools, DataAnalysis, Cpu, Setting,
-  UserFilled, MapLocation, Close, Fold, Expand, MoreFilled, CircleClose, Search
+  UserFilled, MapLocation, Close, Fold, Expand, MoreFilled, CircleClose, Search, ArrowDown
 } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { useAuthStore } from '@/stores/auth'
@@ -218,49 +226,88 @@ const modules: Module[] = [
   { key: 'platform', label: '平台管理', icon: Setting, firstPath: '/platform/projects', perm: 'page:projects' }
 ]
 
+/** 左侧菜单分组：按"工作阶段"归类，而不是按页面数量平铺
+ *
+ * 分组原则：一个分组 = 一类工作动作（准备数据 / 执行作业 / 看结果 / 出成果）
+ * 组内超过 4 项说明该拆组了。
+ */
 const moduleMenus: Record<string, MenuGroup[]> = {
   home: [{ title: '总览', items: [{ path: '/', title: '总览', perm: 'page:dashboard' }] }],
-  rs: [{
-    title: '遥感解译',
-    items: [
-      { path: '/imagery', title: '影像库', perm: 'page:imagery' },
-      { path: '/remote-extract', title: '遥感提取（在线）', perm: 'page:extract' },
-      { path: '/extract', title: '影像解译（本地）', perm: 'page:extract' },
-      { path: '/compare', title: '数据对比', perm: 'page:extract' }
-    ]
-  }],
-  iot: [{
-    title: '监测告警',
-    items: [
-      { path: '/monitor/data', title: '设备监测', perm: 'page:monitor' },
-      { path: '/ops/stations', title: '站点监控', perm: 'page:ops-stations' },
-      { path: '/warning/rules', title: '预警设置', perm: 'page:warning-rules' },
-      { path: '/warning/alarms', title: '告警日志', perm: 'page:warning-alarms' }
-    ]
-  }],
-  report: [{
-    title: '报告中心',
-    items: [
-      { path: '/analysis', title: '数据分析', perm: 'page:analysis' },
-      { path: '/analysis/safety', title: '安全评估', perm: 'page:analysis' },
-      { path: '/analysis/terrain', title: '地形分析', perm: 'page:analysis' },
-      { path: '/analysis/ecology', title: '生态指数', perm: 'page:analysis' },
-      { path: '/analysis/slope', title: '边坡单元', perm: 'page:analysis' },
-      { path: '/report', title: '报告生成', perm: 'page:analysis' }
-    ]
-  }],
-  platform: [{
-    title: '平台管理',
-    items: [
-      { path: '/platform/projects', title: '项目管理', perm: 'page:projects' },
-      { path: '/platform/users', title: '用户中心', perm: 'page:users' },
-      { path: '/platform/roles', title: '角色管理', perm: 'page:roles' },
-      { path: '/platform/audit-logs', title: '操作日志', perm: 'page:audit-logs' },
-      { path: '/platform/dict', title: '数据字典', perm: 'page:dict' },
-      { path: '/platform/health', title: '系统健康', perm: 'page:health' },
-      { path: '/platform/trash', title: '回收站', perm: 'page:extract' }
-    ]
-  }]
+  rs: [
+    {
+      title: '数据准备',
+      items: [
+        { path: '/imagery', title: '影像库', perm: 'page:imagery' },
+        { path: '/boundary', title: '边界管理', perm: 'page:imagery' }
+      ]
+    },
+    {
+      title: '解译作业',
+      items: [
+        { path: '/remote-extract', title: '在线解译', perm: 'page:extract' },
+        { path: '/extract', title: '本地解译', perm: 'page:extract' }
+      ]
+    },
+    {
+      title: '结果比对',
+      items: [{ path: '/compare', title: '数据对比', perm: 'page:extract' }]
+    }
+  ],
+  iot: [
+    {
+      title: '监测数据',
+      items: [{ path: '/monitor/data', title: '设备监测', perm: 'page:monitor' }]
+    },
+    {
+      title: '站点与规则',
+      items: [
+        { path: '/ops/stations', title: '站点监控', perm: 'page:ops-stations' },
+        { path: '/warning/rules', title: '预警设置', perm: 'page:warning-rules' }
+      ]
+    },
+    {
+      title: '告警处理',
+      items: [{ path: '/warning/alarms', title: '告警日志', perm: 'page:warning-alarms' }]
+    }
+  ],
+  report: [
+    {
+      title: '变化分析',
+      items: [{ path: '/analysis', title: '时序与构成', perm: 'page:analysis' }]
+    },
+    {
+      title: '安全与生态评估',
+      items: [
+        { path: '/analysis/safety', title: '综合安全评估', perm: 'page:analysis' },
+        { path: '/analysis/slope', title: '边坡单元', perm: 'page:analysis' },
+        { path: '/analysis/terrain', title: '地形分析', perm: 'page:analysis' },
+        { path: '/analysis/ecology', title: '生态指数', perm: 'page:analysis' }
+      ]
+    },
+    {
+      title: '成果输出',
+      items: [{ path: '/report', title: '报告生成', perm: 'page:analysis' }]
+    }
+  ],
+  platform: [
+    {
+      title: '组织与权限',
+      items: [
+        { path: '/platform/projects', title: '项目管理', perm: 'page:projects' },
+        { path: '/platform/users', title: '用户中心', perm: 'page:users' },
+        { path: '/platform/roles', title: '角色管理', perm: 'page:roles' }
+      ]
+    },
+    {
+      title: '系统运维',
+      items: [
+        { path: '/platform/audit-logs', title: '操作日志', perm: 'page:audit-logs' },
+        { path: '/platform/dict', title: '数据字典', perm: 'page:dict' },
+        { path: '/platform/health', title: '系统健康', perm: 'page:health' },
+        { path: '/platform/trash', title: '回收站', perm: 'page:extract' }
+      ]
+    }
+  ]
 }
 
 // 模块可见性：多子项模块，只要有一个子页可见就显示
@@ -286,6 +333,29 @@ const currentGroups = computed(() => {
     .map((g) => ({ ...g, items: g.items.filter((i) => auth.hasPage(i.perm)) }))
     .filter((g) => g.items.length > 0)
 })
+
+// ---- 分组折叠 ----
+/** 记录被手动收起的组（按「模块:组名」区分，避免不同模块同名组互相影响） */
+const closedGroups = ref<Record<string, boolean>>({})
+function groupKey(title: string) {
+  return `${activeModule.value}:${title}`
+}
+function isGroupClosed(title: string) {
+  return !!closedGroups.value[groupKey(title)]
+}
+function toggleGroup(title: string) {
+  const k = groupKey(title)
+  closedGroups.value = { ...closedGroups.value, [k]: !closedGroups.value[k] }
+}
+// 切换页面时自动展开当前页所在组，避免用户找不到自己点进去的页面
+watch(
+  () => route.path,
+  () => {
+    const g = currentGroups.value.find((x) => x.items.some((i) => i.path === route.path))
+    if (g) closedGroups.value = { ...closedGroups.value, [groupKey(g.title)]: false }
+  },
+  { immediate: true }
+)
 
 const roleLabel = computed(() => {
   // 角色名改从角色表来会更准；这里先展示角色编码，角色管理页有中文名
@@ -649,13 +719,24 @@ watch(
 }
 .expand-btn:hover { background: #e8eaee; color: #0d9488; }
 
-.menu-group { margin-bottom: 4px; }
+.menu-group { margin-bottom: 2px; }
 
 .group-title {
-  padding: 10px 16px 6px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px 6px 16px;
   font-size: 12px;
   color: #a9aeb8;
+  cursor: pointer;
+  user-select: none;
 }
+.group-title:hover { color: #0d9488; }
+.gi-arrow {
+  font-size: 11px;
+  transition: transform 0.15s;
+}
+.gi-arrow.closed { transform: rotate(-90deg); }
 
 .menu-item {
   padding: 9px 16px 9px 24px;

@@ -55,6 +55,7 @@ public class SafetyController {
     private final ProjectService projectService;
     private final PermissionGuard guard;
     private final AuditLogService auditLogService;
+    private final com.ganfeng.rs.boundary.AoiBoundaryController boundaryController;
     private final RestTemplate rest;
     private final ObjectMapper mapper = new ObjectMapper();
 
@@ -65,11 +66,13 @@ public class SafetyController {
                             ProjectService projectService,
                             PermissionGuard guard,
                             AuditLogService auditLogService,
+                            com.ganfeng.rs.boundary.AoiBoundaryController boundaryController,
                             RestTemplateBuilder builder) {
         this.extractionService = extractionService;
         this.projectService = projectService;
         this.guard = guard;
         this.auditLogService = auditLogService;
+        this.boundaryController = boundaryController;
         // 风险计算含 DEM 下载与栅格运算，首次可能较慢，超时给足
         this.rest = builder
                 .setConnectTimeout(Duration.ofSeconds(10))
@@ -96,13 +99,23 @@ public class SafetyController {
         List<List<Double>> permit = new ArrayList<>();
         List<List<Double>> disturbance = new ArrayList<>();
         String projectName = "未指定项目";
+        String permitSource = "none";
         if (projectId != null) {
             Project p = projectService.get(projectId);
             projectService.requireAccess(projectId, auth.getName(), isAdmin);
             projectName = p.getName();
             JsonNode boundary = parseJson(p.getBoundaryJson());
-            permit = ringOf(boundary, "mining");
             disturbance = ringOf(boundary, "disturbance");
+
+            // 优先级：客户导入的 SHP 边界（aoi_boundary 表）> 项目上手圈的 boundaryJson
+            // 理由：导入的是登记数据（有坐标系、可追溯来源），手圈的是演示期临时勾的
+            permit = boundaryController.permitRing(projectId);
+            if (!permit.isEmpty()) {
+                permitSource = "aoi_boundary";
+            } else {
+                permit = ringOf(boundary, "mining");
+                if (!permit.isEmpty()) permitSource = "project_json";
+            }
         }
 
         // ---- 2. 解译几何：同类型同 AOI 只取最新一次 ----
@@ -280,6 +293,8 @@ public class SafetyController {
             result.put("slopeUnits", slopeInfo);
         }
         result.put("projectName", projectName);
+        // 让前端与报告能说清「越界基准来自哪」：导入的登记数据 / 项目上临时圈的 / 没有
+        result.put("permitSource", permitSource);
         result.put("recordCount", latest.size());
         result.put("generatedAt", java.time.LocalDateTime.now().toString());
         if (trend != null) {
@@ -326,8 +341,12 @@ public class SafetyController {
             Project p = projectService.get(projectId);
             projectService.requireAccess(projectId, auth.getName(), isAdmin);
             JsonNode boundary = parseJson(p.getBoundaryJson());
-            permit = ringOf(boundary, "mining");
             disturbance = ringOf(boundary, "disturbance");
+            // 与安全评估保持同一优先级：导入的登记边界 > 项目手圈边界
+            permit = boundaryController.permitRing(projectId);
+            if (permit.isEmpty()) {
+                permit = ringOf(boundary, "mining");
+            }
         }
 
         // 只取三类设施的几何

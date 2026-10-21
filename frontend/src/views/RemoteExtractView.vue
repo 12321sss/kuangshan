@@ -400,11 +400,11 @@ import { Loading } from '@element-plus/icons-vue'
 import {
   Viewer, Cartesian3, Color, ImageryLayer, Entity,
   ScreenSpaceEventHandler, ScreenSpaceEventType, Cartographic,
-  CallbackProperty, PolygonHierarchy, SingleTileImageryProvider, Rectangle
+  CallbackProperty, PolygonHierarchy, SingleTileImageryProvider, Rectangle, CesiumMath
 } from 'cesium'
 import { sentinelApi } from '@/api/sentinel'
 import { haToKm2 } from '@/utils/format'
-import { extractionApi, projectApi, aoiWatchApi } from '@/api'
+import { extractionApi, projectApi, aoiWatchApi, boundaryApi } from '@/api'
 import { useProjectStore } from '@/stores/project'
 import type { ExtractResult, PreviewResult, DiffHeatmapResult } from '@/api/sentinel'
 import type { Extraction } from '@/api/types'
@@ -602,7 +602,39 @@ onMounted(() => {
   // 低配机帧率不足时自动降渲染精度（Quadro K2200 等）
   autoAdjustPerformance(viewer)
   loadBoundary()
+  applyPendingAoi()
 })
+
+/** 从「边界管理」页跳过来时，把导入的边界直接当 AOI 用（免去手圈一遍） */
+function applyPendingAoi() {
+  let raw: string | null = null
+  try {
+    raw = localStorage.getItem('pending_aoi')
+    if (!raw) return
+    localStorage.removeItem('pending_aoi')
+    const ring = JSON.parse(raw) as number[][]
+    if (!Array.isArray(ring) || ring.length < 3) return
+    // 闭合环末点与首点重复，内部逻辑按"顶点列表"处理，去掉重复点
+    const pts = ring.filter((p, i) => i === 0 || p[0] !== ring[0][0] || p[1] !== ring[0][1])
+    aoi.value = pts
+    refreshAoi()
+    const lngs = pts.map((p) => p[0])
+    const lats = pts.map((p) => p[1])
+    const cx = (Math.min(...lngs) + Math.max(...lngs)) / 2
+    const cy = (Math.min(...lats) + Math.max(...lats)) / 2
+    const span = Math.max(Math.max(...lngs) - Math.min(...lngs), Math.max(...lats) - Math.min(...lats))
+    // 用纬度跨度粗算观察高度：1° 纬度 ≈ 111km，取 1.6 倍留边
+    const height = Math.max(1200, span * 111000 * 1.6)
+    viewer?.camera.flyTo({
+      destination: Cartesian3.fromDegrees(cx, cy, height),
+      orientation: { heading: 0, pitch: CesiumMath.toRadians(-60) },
+      duration: 1.2
+    })
+    ElMessage.success('已载入导入的边界作为 AOI，可直接查询影像并提取')
+  } catch {
+    /* 本地存储异常不影响主流程 */
+  }
+}
 
 // ---- 底图/图层开关 ----
 function switchBasemap() {
@@ -637,11 +669,10 @@ function toggleBoundary(v: boolean) {
 /** 加载矿权/扰动/生态边界（三图层） */
 async function loadBoundary() {
   if (!projectStore.currentId || !viewer) return
+  clearBoundary()
   try {
     const json = await projectApi.boundary(projectStore.currentId)
-    if (!json || json === '{}') return
-    const b = JSON.parse(json)
-    clearBoundary()
+    const b = json && json !== '{}' ? JSON.parse(json) : {}
     const layers: Array<{ key: string; color: string; alpha: number; label: string }> = [
       { key: 'mining', color: '#ef4444', alpha: 0.15, label: '矿权红线' },
       { key: 'disturbance', color: '#f59e0b', alpha: 0.25, label: '扰动边界' },
@@ -662,11 +693,46 @@ async function loadBoundary() {
       })
       boundaryEntities.push(entity)
     }
+    // 再叠加「边界管理」里导入的边界（客户 SHP），否则导入完在图上看不见
+    await loadImportedBoundaries()
     // 默认关闭，用户手动开
     boundaryEntities.forEach((e) => (e.show = showBoundary.value))
     viewer.scene.requestRender()
   } catch {
     // 无边界数据时静默
+  }
+}
+
+/** 叠加「边界管理」导入的边界：让导入的 SHP 在提取页可见、可核对 */
+async function loadImportedBoundaries() {
+  if (!projectStore.currentId || !viewer) return
+  const style: Record<string, { color: string; label: string }> = {
+    PERMIT: { color: '#ef4444', label: '矿权范围（导入）' },
+    DISTURBANCE: { color: '#f59e0b', label: '扰动边界（导入）' },
+    ECO: { color: '#22c55e', label: '生态缓冲区（导入）' }
+  }
+  try {
+    const rows = await boundaryApi.list(projectStore.currentId)
+    for (const row of rows) {
+      const st = style[row.boundaryType] || style.PERMIT
+      const detail = await boundaryApi.get(row.id)
+      const outer = detail.geometry?.outer
+      if (!outer || outer.length < 3) continue
+      boundaryEntities.push(
+        viewer.entities.add({
+          polygon: {
+            hierarchy: new PolygonHierarchy(outer.map(([lng, lat]) => Cartesian3.fromDegrees(lng, lat))),
+            material: Color.fromCssColorString(st.color).withAlpha(0.06),
+            height: 0,
+            outline: true,
+            outlineColor: Color.fromCssColorString(st.color)
+          },
+          name: `${st.label}：${row.name}`
+        })
+      )
+    }
+  } catch {
+    // 没有导入边界属正常情况
   }
 }
 
