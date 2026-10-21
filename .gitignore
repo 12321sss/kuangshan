@@ -96,3 +96,6 @@ inference/demo_data/
 # 客户交付文档（合同/报告类，不入代码仓库）
 *.docx
 *.pdf
+
+# 拉取前备份目录（本地保留，不入库）
+_backup_before_pull/

@@ -34,7 +34,7 @@ start "rs-backend" "%JDK17%\bin\java.exe" -jar target\rs-platform-backend-0.0.1-
 cd ..
 
 REM ---- 2. 启动解译服务 ----
-echo [2/3] 启动解译服务 (8000)...
+echo [2/3] 启动解译服务 (8010)...
 cd inference
 if not exist .venv\Scripts\python.exe (
     echo   [提示] 未找到 venv，请先执行：
@@ -42,7 +42,7 @@ if not exist .venv\Scripts\python.exe (
     echo   .venv\Scripts\python -m pip install -r requirements.txt
     cd ..
 ) else (
-    start "rs-inference" ".venv\Scripts\python.exe" -m uvicorn main:app --port 8000 --host 127.0.0.1
+    start "rs-inference" ".venv\Scripts\python.exe" -m uvicorn main:app --port 8010 --host 127.0.0.1
     cd ..
 )
 
@@ -61,7 +61,7 @@ echo ==============================================
 echo  启动完成！访问地址：
 echo    前端   http://localhost:5173
 echo    后端   http://localhost:8080/actuator/health
-echo    解译   http://localhost:8000/health
+echo    解译   http://localhost:8010/health
 echo  账号：admin/admin123
 echo.
 echo  注意：MySQL 需单独启动（mysqld），库 rs_platform
