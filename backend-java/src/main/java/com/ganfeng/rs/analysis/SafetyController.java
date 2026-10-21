@@ -246,6 +246,92 @@ public class SafetyController {
         return ApiResponse.ok(out);
     }
 
+    /**
+     * 边坡单元识别与三区扰动（docs/13 阶段一）
+     *
+     * 只用「采坑/排土场/尾矿」三类设施的边界去圈定边坡带——
+     * 植被、水体不构成需要评估的工程边坡。
+     */
+    @PostMapping("/slope-units")
+    public ApiResponse<Map<String, Object>> slopeUnits(
+            @RequestParam(required = false) Long projectId,
+            Authentication auth) {
+
+        boolean isAdmin = guard.roleCodesOf(auth).contains("ADMIN");
+        List<Extraction> all = extractionService.list(projectId, auth.getName(), isAdmin);
+
+        // 分析范围：矿权优先，其次扰动边界，最后外包框
+        List<List<Double>> permit = new ArrayList<>();
+        List<List<Double>> disturbance = new ArrayList<>();
+        if (projectId != null) {
+            Project p = projectService.get(projectId);
+            projectService.requireAccess(projectId, auth.getName(), isAdmin);
+            JsonNode boundary = parseJson(p.getBoundaryJson());
+            permit = ringOf(boundary, "mining");
+            disturbance = ringOf(boundary, "disturbance");
+        }
+
+        // 只取三类设施的几何
+        Map<String, List<Map<String, Object>>> facilities = new LinkedHashMap<>();
+        for (Extraction e : dedupLatest(all).values()) {
+            String ct = e.getClassType();
+            if (!"PIT".equals(ct) && !"DUMP".equals(ct) && !"TAILINGS".equals(ct)) {
+                continue;
+            }
+            List<Map<String, Object>> feats = toGeoJsonFeatures(e);
+            if (!feats.isEmpty()) {
+                facilities.computeIfAbsent(ct, k -> new ArrayList<>()).addAll(feats);
+            }
+        }
+
+        if (facilities.isEmpty()) {
+            Map<String, Object> empty = new LinkedHashMap<>();
+            empty.put("available", false);
+            empty.put("message", "没有采坑/排土场/尾矿的解译记录，无法划分边坡单元。"
+                    + "请先在遥感提取页对这三类地物做提取并保存。");
+            return ApiResponse.ok(empty);
+        }
+
+        List<List<Double>> aoi = !permit.isEmpty() ? permit
+                : (!disturbance.isEmpty() ? disturbance : bboxOf(dedupLatest(all).values()));
+
+        List<Map<String, Object>> facilitiesPayload = new ArrayList<>();
+        facilities.forEach((ct, feats) -> {
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("classType", ct);
+            m.put("features", feats);
+            facilitiesPayload.add(m);
+        });
+
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("aoi", aoi);
+        payload.put("facilities", facilitiesPayload);
+        payload.put("zoom", 14);
+        payload.put("maxDim", 512);
+
+        Map<String, Object> result;
+        try {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> resp = rest.postForObject(
+                    inferenceBaseUrl + "/api/v1/slope/analyze", payload, Map.class);
+            if (resp == null || !Integer.valueOf(0).equals(resp.get("code"))) {
+                return ApiResponse.error(502, "边坡分析服务返回异常："
+                        + (resp == null ? "空响应" : resp.get("message")));
+            }
+            @SuppressWarnings("unchecked")
+            Map<String, Object> data = (Map<String, Object>) resp.get("data");
+            result = data;
+        } catch (Exception ex) {
+            return ApiResponse.error(502, "边坡分析服务不可用：" + ex.getMessage()
+                    + "（请确认 inference 服务已启动在 " + inferenceBaseUrl + "）");
+        }
+
+        Object high = result.get("summary") instanceof Map<?, ?> sm ? sm.get("high") : null;
+        auditLogService.record(auth.getName(), "SLOPE_UNITS", "PROJECT", String.valueOf(projectId),
+                "生成边坡单元识别：高风险单元 " + high + " 个", null);
+        return ApiResponse.ok(result);
+    }
+
     // ------------------------------------------------------------------
     // 私有工具
     // ------------------------------------------------------------------

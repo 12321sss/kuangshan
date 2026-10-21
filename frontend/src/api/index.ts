@@ -2,8 +2,8 @@ import http from './http'
 import type {
   AdminUser, Alarm, AreaTimeseriesResult, CrsOption, DisplacementSeries, Extraction, Imagery,
   InterpretTask, OverviewStats, PermCatalog, PitForecast, PitYearly, Project, Role, SafetyEvaluation,
-  SceneItem, ScreenSummary, Sensor, SensorDataPoint, Station, TimeSeriesFrame, TimeSeriesGroup,
-  VegetationYearly, WarningRule
+  SceneItem, ScreenSummary, Sensor, SensorDataPoint, SlopeUnitsResult, Station, TimeSeriesFrame,
+  TimeSeriesGroup, VegetationYearly, WarningRule
 } from './types'
 
 /** 业务 API 集中定义（认证相关走 stores/auth.ts 直连）
@@ -123,6 +123,13 @@ export const analysisApi = {
   /** 安全评估元信息（可用记录数提示） */
   safetyMeta: (projectId?: number): Promise<{ recordCount: number; hint: string }> =>
     http.get('/analysis/safety-latest-meta', { params: { projectId } }),
+
+  /**
+   * 边坡单元识别与三区扰动（切脚/削坡/堆载）
+   * 口径：潜在失稳风险筛查，不构成边坡稳定性评价
+   */
+  slopeUnits: (projectId?: number): Promise<SlopeUnitsResult> =>
+    http.post('/analysis/slope-units', null, { params: { projectId }, timeout: 240000 }),
   /** @deprecated 旧硬编码接口已随 AnalysisController 重写移除 */
   pitYearlyOld: (projectId?: number): Promise<PitYearly[]> =>
     http.get('/analysis/pit-yearly', { params: { projectId } }),

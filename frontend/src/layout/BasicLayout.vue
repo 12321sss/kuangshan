@@ -245,6 +245,7 @@ const moduleMenus: Record<string, MenuGroup[]> = {
       { path: '/analysis/safety', title: '安全评估', perm: 'page:analysis' },
       { path: '/analysis/terrain', title: '地形分析', perm: 'page:analysis' },
       { path: '/analysis/ecology', title: '生态指数', perm: 'page:analysis' },
+      { path: '/analysis/slope', title: '边坡单元', perm: 'page:analysis' },
       { path: '/report', title: '报告生成', perm: 'page:analysis' }
     ]
   }],

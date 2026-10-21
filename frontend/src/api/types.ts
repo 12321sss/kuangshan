@@ -391,3 +391,75 @@ export interface SafetyEvaluation {
   gridError?: string
   disclaimer?: string
 }
+
+// ============================================================
+// 边坡单元与三区扰动（docs/13 阶段一）
+// ============================================================
+
+/** 单个边坡单元 */
+export interface SlopeUnit {
+  id: number
+  label: number
+  sector: number
+  facility: 'PIT' | 'DUMP' | 'TAILINGS'
+  areaHa: number
+  pixelCount: number
+  centerLng: number
+  centerLat: number
+  /** 坡脚（单元最低点）—— 现场核查从这里开始 */
+  toeLng: number
+  toeLat: number
+  /** 坡顶（单元最高点） */
+  crestLng: number
+  crestLat: number
+  slopeHeightM: number
+  meanSlopeDeg: number
+  maxSlopeDeg: number
+  aspectDeg: number
+  /** 剖面曲率近似：负=凸形坡（坡脚应力集中），正=凹形坡 */
+  curvature: number
+  /** 坡脚到采坑边界最短距离（米）；<10m 视为已切脚 */
+  toeDistanceM: number | null
+  /** 坡脚周围被采坑覆盖的比例（%） */
+  toeCutRatio: number
+  /** 坡顶是否有堆载（仅采坑单元有意义） */
+  topLoaded: boolean
+  riskLevel: '高' | '较高' | '中' | '低'
+  /** 判定依据（人可读） */
+  reasons: string[]
+}
+
+export interface SlopeUnitsResult {
+  available: boolean
+  message?: string
+  units: SlopeUnit[]
+  summary?: {
+    unitCount: number
+    high: number
+    higher: number
+    medium: number
+    low: number
+    totalAreaHa: number
+    maxSlopeHeightM: number
+    cutToeCount: number
+    note?: string
+  }
+  imageBase64?: string | null
+  legend?: Array<{ label: string; color: string }>
+  /** 诊断信息：解释"为什么没有单元"或"为什么切脚算不出" */
+  diagnostics?: {
+    slopeMeanDeg: number
+    slopeP90Deg: number
+    steepPixelsInDisturbed: number
+    disturbedPixels: number
+    minSlopeDeg: number
+    minUnitPixels: number
+  }
+  disclaimer?: string
+  precision?: {
+    groundResolutionM: number
+    minSlopeDeg: number
+    toeCutDistM: number
+    limitation: string
+  }
+}

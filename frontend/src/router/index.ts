@@ -33,6 +33,7 @@ const router = createRouter({
         { path: 'analysis/safety', name: 'analysis-safety', component: () => import('@/views/SafetyView.vue'), meta: { title: '安全评估', module: 'report', perm: 'page:analysis' } },
         { path: 'analysis/terrain', name: 'analysis-terrain', component: () => import('@/views/TerrainView.vue'), meta: { title: '地形分析', module: 'report', perm: 'page:analysis' } },
         { path: 'analysis/ecology', name: 'analysis-ecology', component: () => import('@/views/EcologyView.vue'), meta: { title: '生态指数', module: 'report', perm: 'page:analysis' } },
+        { path: 'analysis/slope', name: 'analysis-slope', component: () => import('@/views/SlopeView.vue'), meta: { title: '边坡单元', module: 'report', perm: 'page:analysis' } },
         { path: 'report', name: 'report', component: () => import('@/views/ReportView.vue'), meta: { title: '报告生成', module: 'report', perm: 'page:analysis' } },
         { path: 'platform/projects', name: 'platform-projects', component: () => import('@/views/ProjectsView.vue'), meta: { title: '项目管理', module: 'platform', perm: 'page:projects' } },
         { path: 'platform/users', name: 'platform-users', component: () => import('@/views/UsersView.vue'), meta: { title: '用户中心', module: 'platform', perm: 'page:users' } },
