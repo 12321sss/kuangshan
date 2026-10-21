@@ -15,13 +15,6 @@
         <span v-if="aoiAreaText" class="aoi-info">AOI {{ aoiAreaText }}</span>
         <el-divider direction="vertical" />
         <el-button size="small" :loading="demoLoading" @click="loadDemo">一键载入演示数据</el-button>
-        <el-divider direction="vertical" />
-        <el-button size="small" type="warning" plain :loading="terrainLoading" :disabled="aoi.length < 3" @click="doTerrain">
-          地形分析
-        </el-button>
-        <el-button size="small" type="success" plain :loading="rseiLoading" :disabled="aoi.length < 3" @click="doRsei">
-          生态指数 RSEI
-        </el-button>
       </div>
 
       <!-- 影像图层开关 -->
@@ -38,10 +31,6 @@
         <div class="ls-row">
           <span>矿权边界</span>
           <el-switch v-model="showBoundary" size="small" @change="toggleBoundary" />
-        </div>
-        <div class="ls-row">
-          <span>坡度图</span>
-          <el-switch v-model="showSlope" size="small" :disabled="!terrainResult" @change="toggleSlope" />
         </div>
         <div class="ls-title" style="margin-top:8px">底图</div>
         <div class="ls-row">
@@ -254,137 +243,6 @@
         </div>
       </el-card>
 
-      <!-- 地形与安全指标（DEM） -->
-      <el-card v-if="terrainResult" shadow="never" class="side-card">
-        <template #header>
-          <div class="terrain-head">
-            <span class="side-title">地形与安全指标</span>
-            <span class="terrain-src">{{ terrainResult.precision.source }}</span>
-          </div>
-        </template>
-        <div class="terrain-kpi">
-          <div class="tk">
-            <div class="tk-num">{{ terrainResult.summary.elevMin }}~{{ terrainResult.summary.elevMax }}</div>
-            <div class="tk-label">高程范围(m)</div>
-          </div>
-          <div class="tk">
-            <div class="tk-num">{{ terrainResult.summary.reliefM }}</div>
-            <div class="tk-label">地形起伏(m)</div>
-          </div>
-          <div class="tk">
-            <div class="tk-num">{{ terrainResult.summary.slopeMean }}°</div>
-            <div class="tk-label">平均坡度</div>
-          </div>
-          <div class="tk">
-            <div class="tk-num" :class="{ warn: terrainResult.summary.steepPct > 15 }">
-              {{ terrainResult.summary.steepPct }}%
-            </div>
-            <div class="tk-label">陡坡(&ge;15°)占比</div>
-          </div>
-        </div>
-
-        <!-- 坡度分级条 -->
-        <div class="slope-bar">
-          <div
-            v-for="d in terrainResult.summary.distribution"
-            :key="d.label"
-            class="sb-seg"
-            :style="{ width: d.pct + '%', background: slopeColorOf(d.label) }"
-            :title="`${d.label} ${d.pct}%`"
-          ></div>
-        </div>
-        <div class="slope-legend">
-          <span v-for="d in terrainResult.summary.distribution" :key="d.label" class="sl-item">
-            <i :style="{ background: slopeColorOf(d.label) }"></i>{{ d.label }} {{ d.pct }}%
-          </span>
-        </div>
-
-        <div class="terrain-note">
-          低洼汇水候选占 {{ terrainResult.pond.areaPct }}%：邻域高程显著偏低的平坦区，
-          需结合排水设施与影像复核（筛查指标，非水文模型汇流结果）。
-        </div>
-        <div class="terrain-warn">{{ terrainResult.precision.limitation }}</div>
-      </el-card>
-
-      <!-- 生态质量 RSEI -->
-      <el-card v-if="rseiResult" shadow="never" class="side-card">
-        <template #header>
-          <div class="terrain-head">
-            <span class="side-title">生态质量指数 RSEI</span>
-            <span class="terrain-src">{{ rseiResult.precision.level }}</span>
-          </div>
-        </template>
-
-        <div class="terrain-kpi">
-          <div class="tk">
-            <div class="tk-num">{{ rseiResult.mean }}</div>
-            <div class="tk-label">RSEI 均值</div>
-          </div>
-          <div class="tk">
-            <div class="tk-num">{{ rseiResult.explainRatio ? (rseiResult.explainRatio * 100).toFixed(1) + '%' : '-' }}</div>
-            <div class="tk-label">PC1 解释率</div>
-          </div>
-          <div class="tk">
-            <div class="tk-num">{{ (rseiResult.datetime || '').slice(0, 7) }}</div>
-            <div class="tk-label">影像月份</div>
-          </div>
-        </div>
-
-        <!-- 分级占比条 -->
-        <div class="rsei-bar">
-          <div
-            v-for="l in rseiResult.levels"
-            :key="l.label"
-            class="rb-seg"
-            :style="{ width: l.pct + '%', background: l.color }"
-            :title="`${l.label}（${l.range}）：${l.pct}%`"
-          ></div>
-        </div>
-        <div class="rsei-legend">
-          <span v-for="l in rseiResult.levels" :key="l.label" class="rl-item">
-            <i :style="{ background: l.color }"></i>{{ l.label }} {{ l.pct }}%
-          </span>
-        </div>
-
-        <!-- PC1 载荷：说明哪一项主导本区生态 -->
-        <div class="rsei-weight">
-          <div class="rw-title">主成分载荷（正=促进生态，负=抑制）</div>
-          <div v-for="(w, i) in rseiResult.pc1Weight" :key="i" class="rw-row">
-            <span class="rw-label">{{ rseiResult.weightLabels[i] }}</span>
-            <div class="rw-track">
-              <div
-                class="rw-fill"
-                :class="{ neg: w < 0 }"
-                :style="{ width: Math.min(Math.abs(w) * 100, 100) + '%' }"
-              ></div>
-            </div>
-            <span class="rw-val">{{ w.toFixed(3) }}</span>
-          </div>
-        </div>
-
-        <!-- 两期对比 -->
-        <div v-if="rseiResult.compare" class="rsei-cmp">
-          <div class="rc-title">与 {{ (rseiResult.compare.datetime || '').slice(0, 10) }} 对比</div>
-          <div class="rc-row">
-            <span>RSEI：{{ rseiResult.compare.earlyMean }} → {{ rseiResult.compare.lateMean }}</span>
-            <span :class="rseiResult.compare.deltaMean >= 0 ? 'up' : 'down'">
-              {{ rseiResult.compare.deltaMean >= 0 ? '+' : '' }}{{ rseiResult.compare.deltaMean }}
-            </span>
-          </div>
-          <div class="rc-row">
-            <span>改善 {{ rseiResult.compare.improvedPct }}%</span>
-            <span>稳定 {{ rseiResult.compare.stablePct }}%</span>
-            <span>退化 {{ rseiResult.compare.degradedPct }}%</span>
-          </div>
-          <div class="rc-verdict">{{ rseiResult.compare.verdict }}</div>
-        </div>
-
-        <div class="method-note">
-          三因子 RSEI（绿度/湿度/干度），不含热环境维度：Sentinel-2 无热红外波段，
-          无法反演地表温度；完整四因子需融合 Landsat 热红外。
-        </div>
-      </el-card>
-
       <!-- 结果样式 + 保存 + 变化对比 -->
       <el-card shadow="never" class="side-card" :class="{ 'step-disabled': activeStep < 2 }">
         <template #header><span class="side-title">3. 结果与变化</span></template>
@@ -544,11 +402,11 @@ import {
   ScreenSpaceEventHandler, ScreenSpaceEventType, Cartographic,
   CallbackProperty, PolygonHierarchy, SingleTileImageryProvider, Rectangle
 } from 'cesium'
-import { sentinelApi, terrainApi, ecologyApi } from '@/api/sentinel'
+import { sentinelApi } from '@/api/sentinel'
 import { haToKm2 } from '@/utils/format'
 import { extractionApi, projectApi, aoiWatchApi } from '@/api'
 import { useProjectStore } from '@/stores/project'
-import type { ExtractResult, PreviewResult, DiffHeatmapResult, TerrainResult, RseiResult } from '@/api/sentinel'
+import type { ExtractResult, PreviewResult, DiffHeatmapResult } from '@/api/sentinel'
 import type { Extraction } from '@/api/types'
 import { tiandituBaseLayers, gaodeSatelliteProvider } from '@/map/basemap'
 import { autoAdjustPerformance } from '@/map/perf'
@@ -604,14 +462,7 @@ const watches = ref<Array<{
   latestDate?: string | null
   latestAreaHa?: number | null
 }>>([])
-// 生态指数 RSEI
-const rseiLoading = ref(false)
-const rseiResult = ref<RseiResult | null>(null)
 
-// 地形分析
-const terrainLoading = ref(false)
-const terrainResult = ref<TerrainResult | null>(null)
-const showSlope = ref(false)
 let animationTimer: ReturnType<typeof setInterval> | undefined
 let animationItems: HistoryItem[] = []
 let animationIndex = 0
@@ -713,7 +564,6 @@ let aoiEntity: Entity | null = null
 let aoiPointEntities: Entity[] = []
 let resultEntities: Entity[] = []
 let clippedLayer: ImageryLayer | null = null
-let slopeLayer: ImageryLayer | null = null
 let boundaryEntities: Entity[] = []
 
 const aoiAreaText = computed(() => {
@@ -899,6 +749,14 @@ function finishDraw() {
   drawHandler = null
   drawing.value = false
   refreshAoi()
+  // 把 AOI 存到本地，供「地形分析」等独立页面复用"最近一次圈选"
+  try {
+    if (aoi.value.length >= 3) {
+      localStorage.setItem('last_aoi', JSON.stringify(aoi.value))
+    }
+  } catch {
+    /* 隐私模式等场景下写入可能失败，不影响主流程 */
+  }
   viewer?.scene.requestRender()
 }
 
@@ -1254,145 +1112,10 @@ function clearResult() {
   resultEntities = []
 }
 
-// ---- 地形分析（DEM 坡度/汇水）----
-/** 坡度分级配色，与后端 PNG 分级一致 */
-function slopeColorOf(label: string): string {
-  if (label.includes('<2')) return '#4caf50'
-  if (label.includes('2-6')) return '#aed581'
-  if (label.includes('6-15')) return '#ffd54f'
-  if (label.includes('15-25')) return '#ff9800'
-  return '#d32f2f'
-}
-
 /**
  * 生态指数 RSEI：三因子 PCA（绿度/湿度/干度）。
  * 同时算两期对比（本年 vs 上年），便于看生态是改善还是退化。
  */
-async function doRsei() {
-  if (aoi.value.length < 3) {
-    ElMessage.warning('请先圈选 AOI')
-    return
-  }
-  rseiLoading.value = true
-  busy.value = true
-  busyText.value = '正在计算生态指数 RSEI'
-  busyHint.value = '需拉取 6 个波段（含短波红外），首次约 1-3 分钟'
-  stageSteps.value = ['检索影像', '下载 6 个波段', '计算绿度/湿度/干度', 'PCA 合成']
-  stageIndex.value = 0
-  try {
-    const res = await ecologyApi.rsei({
-      aoi: aoi.value,
-      startDate: startDate.value,
-      endDate: endDate.value,
-      maxCloud: maxCloud.value,
-      withImage: true,
-      // 对比期：与上一个等长区间比较
-      compareStart: shiftYear(startDate.value, -1),
-      compareEnd: shiftYear(endDate.value, -1)
-    })
-    stageIndex.value = 3
-    rseiResult.value = res
-    if (res.imageBase64) {
-      await renderRseiLayer(res.imageBase64)
-    }
-    ElMessage.success(
-      `RSEI 均值 ${res.mean}，PC1 解释率 ${res.explainRatio ? (res.explainRatio * 100).toFixed(0) + '%' : '-'}`
-    )
-  } catch (e: any) {
-    ElMessage.error(friendlyError(e))
-  } finally {
-    rseiLoading.value = false
-    busy.value = false
-  }
-}
-
-/** 日期字符串整体平移若干年（YYYY-MM-DD） */
-function shiftYear(date: string, delta: number): string {
-  if (!date) return date
-  const d = new Date(date)
-  if (isNaN(d.getTime())) return date
-  d.setFullYear(d.getFullYear() + delta)
-  return d.toISOString().slice(0, 10)
-}
-
-/** 把 RSEI 分级专题图贴到 AOI 范围（复用剪切影像图层） */
-async function renderRseiLayer(base64: string) {
-  const byteChars = atob(base64)
-  const bytes = new Uint8Array(byteChars.length)
-  for (let i = 0; i < byteChars.length; i++) bytes[i] = byteChars.charCodeAt(i)
-  const blob = new Blob([bytes], { type: 'image/png' })
-  const url = URL.createObjectURL(blob)
-  const { width, height } = await readImageSize(url)
-  if (clippedLayer && viewer) {
-    viewer.imageryLayers.remove(clippedLayer, true)
-  }
-  const bounds = aoiBounds()
-  if (!viewer) return
-  clippedLayer = viewer.imageryLayers.addImageryProvider(
-    new SingleTileImageryProvider({
-      url,
-      rectangle: Rectangle.fromDegrees(bounds.west, bounds.south, bounds.east, bounds.north),
-      tileWidth: width,
-      tileHeight: height
-    })
-  )
-  viewer.scene.requestRender()
-}
-
-async function doTerrain() {
-  if (aoi.value.length < 3) {
-    ElMessage.warning('请先圈选 AOI')
-    return
-  }
-  terrainLoading.value = true
-  busy.value = true
-  busyText.value = '正在分析地形'
-  busyHint.value = '首次读取高程瓦片约 10–30 秒（约 10m 分辨率），之后走本地缓存'
-  try {
-    const res = await terrainApi.analyze(aoi.value, 14, true)
-    terrainResult.value = res
-    if (res.slopeImageBase64) {
-      await renderSlopeLayer(res.slopeImageBase64)
-      showSlope.value = true
-    }
-    ElMessage.success(
-      `地形分析完成：起伏 ${res.summary.reliefM}m，平均坡度 ${res.summary.slopeMean}°，` +
-      `陡坡占比 ${res.summary.steepPct}%`
-    )
-  } catch (e: any) {
-    ElMessage.error(friendlyError(e))
-  } finally {
-    terrainLoading.value = false
-    busy.value = false
-  }
-}
-
-/** 把坡度分级 PNG 贴到 AOI 范围（与真彩贴图同一套做法） */
-async function renderSlopeLayer(b64: string) {
-  const byteChars = atob(b64)
-  const bytes = new Uint8Array(byteChars.length)
-  for (let i = 0; i < byteChars.length; i++) bytes[i] = byteChars.charCodeAt(i)
-  const url = URL.createObjectURL(new Blob([bytes], { type: 'image/png' }))
-  const { width, height } = await readImageSize(url)
-  if (slopeLayer) { viewer?.imageryLayers.remove(slopeLayer, true); slopeLayer = null }
-  const b = aoiBounds()
-  slopeLayer = viewer!.imageryLayers.addImageryProvider(
-    new SingleTileImageryProvider({
-      url,
-      rectangle: Rectangle.fromDegrees(b.west, b.south, b.east, b.north),
-      tileWidth: width,
-      tileHeight: height
-    })
-  )
-  slopeLayer.alpha = 0.75
-  viewer?.scene.requestRender()
-}
-
-function toggleSlope(v: boolean) {
-  if (slopeLayer) slopeLayer.show = v
-  viewer?.scene.requestRender()
-}
-
 // ---- AOI 关注区（监测订阅）----
 /** 地物类型中文名（关注区列表用） */
 function classLabelOf(code: string): string {
