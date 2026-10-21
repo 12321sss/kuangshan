@@ -99,3 +99,6 @@ inference/demo_data/
 
 # 拉取前备份目录（本地保留，不入库）
 _backup_before_pull/
+
+# 本地临时验证文件（边界导入测试用，不入库）
+inference/_t/
