@@ -400,7 +400,7 @@ import { Loading } from '@element-plus/icons-vue'
 import {
   Viewer, Cartesian3, Color, ImageryLayer, Entity,
   ScreenSpaceEventHandler, ScreenSpaceEventType, Cartographic,
-  CallbackProperty, PolygonHierarchy, SingleTileImageryProvider, Rectangle, CesiumMath
+  CallbackProperty, PolygonHierarchy, SingleTileImageryProvider, Rectangle, Math as CesiumMath
 } from 'cesium'
 import { sentinelApi } from '@/api/sentinel'
 import { haToKm2 } from '@/utils/format'
