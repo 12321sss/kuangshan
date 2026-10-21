@@ -11,9 +11,20 @@ requests==2.34.2
 # 注 1：numpy 必须 2.x —— Python 3.13 无 1.26 预编译轮子，只能源码编译（会失败）
 # 注 2：不要装 pyproj —— Windows 无预编译轮子且 3.13 编译失败；
 #       rasterio 已自带 GDAL 全套（CRS / warp / 窗口读取），足够做坐标变换
-numpy==2.2.6
+# 注 3：实际版本为 2.5.4（装 scikit-learn 时被依赖解析升级）；
+#       已实测 rasterio 1.4.3 / shapely 2.2.0 与之兼容，勿随意降级
+numpy==2.5.4
 rasterio==1.5.2
 shapely==2.2.0
+
+# ---- 边界导入与监督分类（docs/12）----
+# pyshp：纯 Python 读 SHP/SHX/DBF，无需 GDAL 绑定
+# scikit-learn + scipy：随机森林分类、混淆矩阵、Kappa 系数
+#   Windows + Python 3.13 均有 cp313 预编译轮子，安装时务必加 --only-binary :all:
+#   安装命令：.venv\Scripts\python.exe -m pip install -r requirements.txt --only-binary :all:
+pyshp==3.1.6
+scikit-learn==1.9.1
+scipy==1.18.1
 # python-docx：S4 稳定性/安全性报告导出
 python-docx==1.2.0
 
