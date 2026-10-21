@@ -111,13 +111,14 @@ export const analysisApi = {
   }> => http.get('/analysis/aoi-profile', { params: { projectId, signature } }),
 
   /**
-   * 开采安全风险评估（五维评分 + 风险分级图 + 热点清单）
+   * 开采安全风险评估（六维评分 + 风险分级图 + 热点清单）
+   * @param withSlope 是否先用边坡单元细化形态维度（会多花 10–30 秒，但更贴近实际）
    * 口径：潜在安全风险筛查，不是边坡稳定性评价，不给安全系数
    */
-  safetyEvaluate: (projectId?: number, withGrid = true): Promise<SafetyEvaluation> =>
+  safetyEvaluate: (projectId?: number, withGrid = true, withSlope = false): Promise<SafetyEvaluation> =>
     http.post('/analysis/safety-evaluate', null, {
-      params: { projectId, withGrid },
-      timeout: 240000
+      params: { projectId, withGrid, withSlope },
+      timeout: 300000
     }),
 
   /** 安全评估元信息（可用记录数提示） */

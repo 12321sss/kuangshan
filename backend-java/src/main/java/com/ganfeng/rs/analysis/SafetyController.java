@@ -86,6 +86,7 @@ public class SafetyController {
     public ApiResponse<Map<String, Object>> safetyEvaluate(
             @RequestParam(required = false) Long projectId,
             @RequestParam(defaultValue = "true") boolean withGrid,
+            @RequestParam(defaultValue = "false") boolean withSlope,
             Authentication auth) {
 
         boolean isAdmin = guard.roleCodesOf(auth).contains("ADMIN");
@@ -186,7 +187,60 @@ public class SafetyController {
             logger.warn("RSEI 计算失败，生态维度按中性分计入：{}", ex.getMessage());
         }
 
-        // ---- 5. 调 inference 风险接口 ----
+        // ---- 5. 边坡单元（可选）：让形态维度按「最差单元」聚合，而非全区平均 ----
+        List<Map<String, Object>> slopeUnits = new ArrayList<>();
+        Map<String, Object> slopeInfo = new LinkedHashMap<>();
+        if (withSlope) {
+            List<Map<String, Object>> facilityPayload = new ArrayList<>();
+            for (String ct : List.of("PIT", "DUMP", "TAILINGS")) {
+                List<Map<String, Object>> feats = byClass.get(ct);
+                if (feats == null || feats.isEmpty()) continue;
+                Map<String, Object> m = new LinkedHashMap<>();
+                m.put("classType", ct);
+                m.put("features", feats);
+                facilityPayload.add(m);
+            }
+            if (!facilityPayload.isEmpty()) {
+                try {
+                    Map<String, Object> slopePayload = new LinkedHashMap<>();
+                    slopePayload.put("aoi", aoi);
+                    slopePayload.put("facilities", facilityPayload);
+                    slopePayload.put("zoom", 14);
+                    slopePayload.put("maxDim", 512);
+                    @SuppressWarnings("unchecked")
+                    Map<String, Object> sr = rest.postForObject(
+                            inferenceBaseUrl + "/api/v1/slope/analyze", slopePayload, Map.class);
+                    if (sr != null && Integer.valueOf(0).equals(sr.get("code"))) {
+                        @SuppressWarnings("unchecked")
+                        Map<String, Object> sd = (Map<String, Object>) sr.get("data");
+                        Object us = sd.get("units");
+                        if (us instanceof List<?> list) {
+                            for (Object o : list) {
+                                if (o instanceof Map<?, ?> mm) {
+                                    @SuppressWarnings("unchecked")
+                                    Map<String, Object> unit = (Map<String, Object>) mm;
+                                    slopeUnits.add(unit);
+                                }
+                            }
+                        }
+                        slopeInfo.put("available", Boolean.TRUE.equals(sd.get("available")));
+                        slopeInfo.put("unitCount", slopeUnits.size());
+                        slopeInfo.put("summary", sd.get("summary"));
+                        logger.info("边坡单元识别完成：{} 个单元", slopeUnits.size());
+                    }
+                } catch (Exception ex) {
+                    // 边坡分析失败不阻断评估：形态维度会自动退回全区统计
+                    logger.warn("边坡单元识别失败，形态维度退回全区统计：{}", ex.getMessage());
+                    slopeInfo.put("available", false);
+                    slopeInfo.put("error", ex.getMessage());
+                }
+            } else {
+                slopeInfo.put("available", false);
+                slopeInfo.put("reason", "没有采坑/排土场/尾矿记录，无法划分边坡单元");
+            }
+        }
+
+        // ---- 6. 调 inference 风险接口 ----
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("aoi", aoi);
         payload.put("permitBoundary", permit.isEmpty() ? null : permit);
@@ -195,6 +249,7 @@ public class SafetyController {
         payload.put("rsei", rseiStats);
         payload.put("withGrid", withGrid);
         payload.put("zoom", 14);
+        payload.put("slopeUnits", slopeUnits);
 
         Map<String, Object> result;
         try {
@@ -214,11 +269,15 @@ public class SafetyController {
                     + "（请确认 inference 服务已启动在 " + inferenceBaseUrl + "）");
         }
 
-        // ---- 6. 补充上下文并记审计 ----
+        // ---- 7. 补充上下文并记审计 ----
         result.put("available", true);
         // 附带 RSEI 统计：报告页据此写「生态质量评价」章节，无需前端二次调用
         if (rseiStats != null) {
             result.put("rsei", rseiStats);
+        }
+        // 边坡单元使用情况：前端据此显示「形态维度由 N 个单元聚合」或提示降级原因
+        if (!slopeInfo.isEmpty()) {
+            result.put("slopeUnits", slopeInfo);
         }
         result.put("projectName", projectName);
         result.put("recordCount", latest.size());

@@ -10,6 +10,15 @@
           </span>
         </div>
         <div class="op-right">
+          <el-tooltip placement="bottom">
+            <template #content>
+              <div style="max-width: 280px; line-height: 1.7">
+                勾选后先用 DEM 划分边坡单元，形态维度按「最差 3 个单元」聚合，
+                比全区平均更能反映真实危险点。会多花 10–30 秒。
+              </div>
+            </template>
+            <el-checkbox v-model="withSlope" size="small">用边坡单元细化形态评估</el-checkbox>
+          </el-tooltip>
           <el-checkbox v-model="withGrid" size="small">生成风险专题图与热点</el-checkbox>
           <el-button type="primary" :loading="loading" @click="runEvaluate">开始评估</el-button>
         </div>
@@ -103,6 +112,14 @@
             <el-tag size="small" effect="plain" :type="confType(d.confidence)">
               可信度 {{ confLabel(d.confidence) }}
             </el-tag>
+            <el-tag
+              v-if="d.basis === 'slope_units'"
+              size="small" effect="plain" type="success"
+            >基于边坡单元</el-tag>
+            <el-tag
+              v-else-if="d.basis === 'fallback' && d.key === 'terrain'"
+              size="small" effect="plain" type="info"
+            >全区统计</el-tag>
           </div>
           <ul class="dim-evidence">
             <li v-for="(e, i) in d.evidence" :key="i">{{ e }}</li>
@@ -255,6 +272,8 @@ const projectStore = useProjectStore()
 
 const loading = ref(false)
 const withGrid = ref(true)
+/** 是否用边坡单元细化形态维度（多花 10-30 秒，但结果更贴近实际） */
+const withSlope = ref(false)
 const result = ref<SafetyEvaluation | null>(null)
 const radarRef = ref<HTMLDivElement>()
 let radar: echarts.ECharts | undefined
@@ -287,7 +306,7 @@ function formatTime(t?: string) { return t ? t.replace('T', ' ').slice(0, 16) : 
 async function runEvaluate() {
   loading.value = true
   try {
-    const res = await analysisApi.safetyEvaluate(projectStore.currentId ?? undefined, withGrid.value)
+    const res = await analysisApi.safetyEvaluate(projectStore.currentId ?? undefined, withGrid.value, withSlope.value)
     result.value = res
     if (res.available) {
       await nextTick()

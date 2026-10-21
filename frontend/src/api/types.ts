@@ -338,6 +338,8 @@ export interface SafetyDimension {
   /** 支撑该评分的具体数值（如「陡坡占比 12.3%」） */
   evidence: string[]
   advice: string
+  /** 计算依据：slope_units=边坡单元聚合，fallback=全区统计 */
+  basis?: 'slope_units' | 'fallback' | null
 }
 
 /** 风险热点：栅格风险超过阈值的连片区域 */

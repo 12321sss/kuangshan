@@ -178,21 +178,99 @@ def _feature_to_polygon(feature: dict, lat0: float):
 # ---------------------------------------------------------------------------
 # A 形态风险
 # ---------------------------------------------------------------------------
-def _terrain_risk(terrain: dict | None, pit_ratio_of_aoi: float) -> dict[str, Any]:
-    """坡度陡峭度 + 起伏 + 采坑内陡坡集中度
+def _unit_risk_score(u: dict) -> float:
+    """单个边坡单元的风险分（0-100）
 
-    评分逻辑（0-100，越高越危险）：
-      陡坡占比 ≥25% → 满分区间；15-25% 线性过渡
-      平均坡度 >15° → 加分
-      起伏 >300m → 加分（高陡地形）
+    打分逻辑按 docs/13 的力学因果：切脚是主导因子（失去支撑），
+    其次坡高（下滑力大）、坡度（下滑力大）。曲率只做轻微调节。
+    """
+    score = 0.0
+
+    # ① 切脚（主导，占 50 分）
+    d = u.get("toeDistanceM")
+    if d is None:
+        score += 15.0          # 无法判定给中等偏低，不假装安全也不冤枉
+    elif d <= 10:
+        score += 50.0
+    elif d <= 30:
+        score += 35.0
+    elif d <= 50:
+        score += 22.0
+    else:
+        score += 8.0
+
+    # 切脚比例：坡脚周围被挖掉的范围
+    cut = float(u.get("toeCutRatio") or 0)
+    score += min(cut / 30.0 * 15.0, 15.0)
+
+    # ② 坡高（占 20 分）：80m 以上给满
+    h = float(u.get("slopeHeightM") or 0)
+    score += min(h / 80.0 * 20.0, 20.0)
+
+    # ③ 坡度（占 15 分）：40° 以上给满
+    sl = float(u.get("meanSlopeDeg") or 0)
+    score += min(sl / 40.0 * 15.0, 15.0)
+
+    # ④ 坡顶堆载（仅采坑单元有意义，占 5 分）
+    if u.get("topLoaded"):
+        score += 5.0
+
+    # ⑤ 凸形坡微调（曲率为负 = 凸，坡脚应力集中）
+    curv = float(u.get("curvature") or 0)
+    if curv < -0.01:
+        score += 3.0
+
+    return min(score, 100.0)
+
+
+def _terrain_risk(terrain: dict | None, pit_ratio_of_aoi: float,
+                  units: list[dict] | None = None) -> dict[str, Any]:
+    """形态风险：优先用「边坡单元最差聚合」，无单元时退回全区坡度统计
+
+    为什么取最差而不是平均：边坡失稳是「最弱一环」问题，
+    一个危险边坡就足以造成事故，平均分会把它稀释掉。
     """
     evidence: list[str] = []
+
+    # ---- 优先路径：有边坡单元 ----
+    if units:
+        scored = sorted(((_unit_risk_score(u), u) for u in units), key=lambda x: -x[0])
+        top = scored[:3]
+        if top:
+            score = sum(s for s, _ in top) / len(top)
+            worst = top[0][1]
+            evidence.append(
+                f"共 {len(units)} 个边坡单元，最差 {len(top)} 个平均 {_r(score)} 分"
+            )
+            evidence.append(
+                f"最危险单元：{worst.get('facility')} 坡高 {worst.get('slopeHeightM')}m、"
+                f"平均坡度 {worst.get('meanSlopeDeg')}°、"
+                f"切脚距离 {worst.get('toeDistanceM') if worst.get('toeDistanceM') is not None else '不可判定'}"
+                + ("m" if worst.get("toeDistanceM") is not None else "")
+            )
+            for r in (worst.get("reasons") or [])[:2]:
+                evidence.append(str(r))
+
+            advice = (
+                "按单元清单逐条现场核查，优先看切脚距离 <10m 且坡高 >50m 的单元；"
+                "坡脚位置已在清单里给出坐标，可直接用 GIS 定位"
+            )
+            return {
+                "score": _r(score),
+                "confidence": "medium",
+                "evidence": evidence,
+                "advice": advice,
+                "basis": "slope_units",
+            }
+
+    # ---- 退回路径：全区坡度统计（无单元时的保守估计）----
     if not terrain:
         return {
             "score": 40.0,
             "confidence": "low",
             "evidence": ["缺少地形数据，按中性分 40 计（建议先做地形分析）"],
             "advice": "补做地形分析后再看该项",
+            "basis": "fallback",
         }
 
     s = terrain
@@ -200,13 +278,9 @@ def _terrain_risk(terrain: dict | None, pit_ratio_of_aoi: float) -> dict[str, An
     slope_mean = float(s.get("slopeMean") or 0)
     relief = float(s.get("reliefM") or 0)
 
-    # 陡坡占比：25% 即达 100 分
     score_steep = _clamp(steep_pct / 25.0 * 100)
-    # 平均坡度：15° 达 100 分
     score_slope = _clamp(slope_mean / 15.0 * 100)
-    # 起伏：300m 达 100 分
     score_relief = _clamp(relief / 300.0 * 100)
-
     score = 0.5 * score_steep + 0.3 * score_slope + 0.2 * score_relief
 
     evidence.append(f"陡坡(≥15°)占比 {steep_pct}%")
@@ -214,12 +288,16 @@ def _terrain_risk(terrain: dict | None, pit_ratio_of_aoi: float) -> dict[str, An
     evidence.append(f"地形起伏 {relief} m")
     if pit_ratio_of_aoi > 0:
         evidence.append(f"采坑面积占分析区 {_r(pit_ratio_of_aoi * 100)}%")
+    evidence.append("未划分边坡单元，本项为全区统计的保守估计")
 
-    advice = (
-        "优先核查陡坡集中区（坡度≥25°）的边帮与台阶状况；"
-        "若采坑已形成高陡边坡，需现场量测台阶坡面角与坡高"
-    )
-    return {"score": _r(score), "confidence": "medium", "evidence": evidence, "advice": advice}
+    return {
+        "score": _r(score),
+        "confidence": "medium" if terrain else "low",
+        "evidence": evidence,
+        "advice": "优先核查陡坡集中区（坡度≥25°）的边帮与台阶状况；"
+                  "若采坑已形成高陡边坡，需现场量测台阶坡面角与坡高",
+        "basis": "fallback",
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -676,10 +754,11 @@ def evaluate(payload: dict[str, Any]) -> dict[str, Any]:
     # ---- 排土场是否落在低洼汇水区 ----
     dump_on_flow = bool(pond_pct >= 3.0 and ("DUMP" in class_polys or "TAILINGS" in class_polys))
 
-    # ---- 五维评分 ----
+    # ---- 六维评分 ----
     pit_ratio = class_area_ha.get("PIT", 0.0) / aoi_ha if aoi_ha > 0 else 0.0
     dim_payload = {
-        "terrain": _terrain_risk(terrain, pit_ratio),
+        # 形态维度：若传入了边坡单元，改用「最差单元聚合」；否则退回全区统计
+        "terrain": _terrain_risk(terrain, pit_ratio, payload.get("slopeUnits")),
         "expansion": _expansion_risk(trend),
         "encroach": _encroach_risk(encroach),
         "coverage": _coverage_risk(class_area_ha, aoi_ha),
@@ -701,6 +780,7 @@ def evaluate(payload: dict[str, Any]) -> dict[str, Any]:
             "confidence": d.get("confidence", "medium"),
             "evidence": d.get("evidence", []),
             "advice": d.get("advice", ""),
+            "basis": d.get("basis"),      # 形态维度会标注是「单元聚合」还是「全区统计」
         })
 
     label, color = _level_of(total)
