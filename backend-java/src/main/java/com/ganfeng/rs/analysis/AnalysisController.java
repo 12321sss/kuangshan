@@ -314,7 +314,210 @@ public class AnalysisController {
         return ApiResponse.ok(out);
     }
 
-    /** 取某条记录所属的期：按月 YYYY-MM / 按年 YYYY */    private static String periodOf(Extraction e, boolean byYear) {
+    /**
+     * 趋势研判（B4）+ 持续复绿判定（C3）
+     *
+     * B4：把"面积时序"翻译成方向性结论——扰动在扩还是在收、植被在升还是在降。
+     * C3：按方案表 8 的口径判定"连续 ≥3 期植被回升"，但**结论只能写"持续复绿"**，
+     *     不能写"生态修复成功"（红线：植被信号回升 ≠ 生态功能恢复）。
+     *
+     * 数据不足时明确返回"不足以判定"，不拿两期数据硬下结论。
+     */
+    @GetMapping("/trend-judgement")
+    public ApiResponse<Map<String, Object>> trendJudgement(
+            @RequestParam(required = false) Long projectId,
+            Authentication auth) {
+        boolean isAdmin = guard.roleCodesOf(auth).contains("ADMIN");
+        List<Extraction> all = extractionService.list(projectId, auth.getName(), isAdmin);
+
+        if (all.isEmpty()) {
+            Map<String, Object> empty = new LinkedHashMap<>();
+            empty.put("available", false);
+            empty.put("message", "该项目还没有解译记录，无法做趋势研判");
+            return ApiResponse.ok(empty);
+        }
+
+        // AOI → 类型 → 期 → 记录（同期同 AOI 多次提取取最新）
+        Map<String, Map<String, Map<String, Extraction>>> byAoi = new LinkedHashMap<>();
+        for (Extraction e : all) {
+            String sig = sigOf(e);
+            Map<String, Map<String, Extraction>> byType =
+                    byAoi.computeIfAbsent(sig, k -> new LinkedHashMap<>());
+            Map<String, Extraction> byPeriod =
+                    byType.computeIfAbsent(e.getClassType(), k -> new LinkedHashMap<>());
+            String period = periodOf(e, false);
+            Extraction exist = byPeriod.get(period);
+            if (exist == null || newerObservation(e, exist)) {
+                byPeriod.put(period, e);
+            }
+        }
+
+        // ---- 全区各期面积（按类型合计，跨 AOI 可加）----
+        TreeMap<String, Map<String, Double>> areaByPeriod = new TreeMap<>();
+        for (Map<String, Map<String, Extraction>> byType : byAoi.values()) {
+            for (Map.Entry<String, Map<String, Extraction>> t : byType.entrySet()) {
+                String type = t.getKey();
+                for (Map.Entry<String, Extraction> p : t.getValue().entrySet()) {
+                    String period = p.getKey();
+                    double ha = nz(p.getValue().getExtractAreaHa());
+                    areaByPeriod.computeIfAbsent(period, k -> new LinkedHashMap<>())
+                            .merge(type, ha, Double::sum);
+                }
+            }
+        }
+
+        List<Map<String, Object>> periods = new ArrayList<>();
+        for (Map.Entry<String, Map<String, Double>> e : areaByPeriod.entrySet()) {
+            Map<String, Double> byType = e.getValue();
+            double disturb = 0;
+            for (String k : List.of("PIT", "DUMP", "TAILINGS", "BARE", "ROAD")) {
+                disturb += byType.getOrDefault(k, 0.0);
+            }
+            Map<String, Object> row = new LinkedHashMap<>();
+            row.put("period", e.getKey());
+            row.put("disturbHa", round2(disturb));
+            row.put("pitHa", round2(byType.getOrDefault("PIT", 0.0)));
+            row.put("vegHa", round2(byType.getOrDefault("VEGETATION", 0.0)));
+            row.put("byType", byType.entrySet().stream()
+                    .collect(java.util.stream.Collectors.toMap(
+                            Map.Entry::getKey,
+                            x -> round2(x.getValue()),
+                            (a, b) -> a, LinkedHashMap::new)));
+            periods.add(row);
+        }
+
+        // ---- B4 扰动趋势：最近一期 vs 上一期 ----
+        Map<String, Object> disturbTrend = new LinkedHashMap<>();
+        if (periods.size() >= 2) {
+            double prev = (double) ((Map<?, ?>) periods.get(periods.size() - 2)).get("disturbHa");
+            double last = (double) ((Map<?, ?>) periods.get(periods.size() - 1)).get("disturbHa");
+            double delta = last - prev;
+            Double pct = prev > 0.01 ? round2(delta / prev * 100) : null;
+            String direction;
+            if (pct == null) {
+                direction = "无法比较";
+            } else if (pct >= 10) {
+                direction = "扩张";
+            } else if (pct <= -10) {
+                direction = "收缩";
+            } else {
+                direction = "基本稳定";
+            }
+            double first = (double) ((Map<?, ?>) periods.get(0)).get("disturbHa");
+            disturbTrend.put("prevPeriod", ((Map<?, ?>) periods.get(periods.size() - 2)).get("period"));
+            disturbTrend.put("lastPeriod", ((Map<?, ?>) periods.get(periods.size() - 1)).get("period"));
+            disturbTrend.put("prevHa", prev);
+            disturbTrend.put("lastHa", last);
+            disturbTrend.put("deltaHa", round2(delta));
+            disturbTrend.put("deltaPct", pct);
+            disturbTrend.put("direction", direction);
+            disturbTrend.put("overallDeltaHa", round2(last - first));
+            disturbTrend.put("firstPeriod", ((Map<?, ?>) periods.get(0)).get("period"));
+        } else {
+            disturbTrend.put("direction", "数据不足");
+            disturbTrend.put("note", "至少需要 2 期数据才能判断扩张还是收缩");
+        }
+
+        // ---- C3 持续复绿：按 AOI 看植被序列 ----
+        List<Map<String, Object>> regreening = new ArrayList<>();
+        for (Map.Entry<String, Map<String, Map<String, Extraction>>> aoi : byAoi.entrySet()) {
+            Map<String, Extraction> vegByPeriod = aoi.getValue().get("VEGETATION");
+            if (vegByPeriod == null || vegByPeriod.size() < 2) {
+                continue;
+            }
+            List<Map.Entry<String, Extraction>> sorted = new ArrayList<>(vegByPeriod.entrySet());
+            sorted.sort(Map.Entry.comparingByKey());
+
+            List<Map<String, Object>> series = new ArrayList<>();
+            int upStreak = 0;
+            double prevHa = -1;
+            for (Map.Entry<String, Extraction> p : sorted) {
+                double ha = nz(p.getValue().getExtractAreaHa());
+                Map<String, Object> pt = new LinkedHashMap<>();
+                pt.put("period", p.getKey());
+                pt.put("areaHa", round2(ha));
+                series.add(pt);
+                if (prevHa >= 0) {
+                    if (ha > prevHa * 1.005) { // 0.5% 容差，避免解译抖动被当成"上升"
+                        upStreak++;
+                    } else if (ha < prevHa * 0.995) {
+                        upStreak = 0;
+                    }
+                }
+                prevHa = ha;
+            }
+            double firstHa = (double) ((Map<?, ?>) series.get(0)).get("areaHa");
+            double lastHa = (double) ((Map<?, ?>) series.get(series.size() - 1)).get("areaHa");
+            Double growthPct = firstHa > 0.01 ? round2((lastHa - firstHa) / firstHa * 100) : null;
+
+            String verdict;
+            String note;
+            if (series.size() >= 3 && upStreak >= 3 && growthPct != null && growthPct >= 5) {
+                verdict = "持续复绿";
+                note = "连续 " + upStreak + " 期植被面积回升，累计 +" + growthPct
+                        + "%。注意：仅表示植被覆盖回升，不等于生态修复成功，需结合现场植被长势核实";
+            } else if (upStreak >= 2) {
+                verdict = "复绿待观察";
+                note = "连续 " + upStreak + " 期回升，累计 " + (growthPct == null ? "-" : growthPct + "%")
+                        + "，期数不足 3 期或增幅不足 5%，暂不下复绿结论";
+            } else if (growthPct != null && growthPct <= -5) {
+                verdict = "植被退化";
+                note = "植被面积累计下降 " + Math.abs(growthPct) + "%，需核查扰动是否扩大";
+            } else {
+                verdict = "未复绿";
+                note = "近期植被面积未呈连续回升，属波动或持平";
+            }
+
+            Map<String, Object> one = new LinkedHashMap<>();
+            one.put("signature", aoi.getKey());
+            one.put("periodCount", series.size());
+            one.put("upStreak", upStreak);
+            one.put("growthPct", growthPct);
+            one.put("verdict", verdict);
+            one.put("note", note);
+            one.put("series", series);
+            regreening.add(one);
+        }
+        regreening.sort((a, b) -> Integer.compare((int) b.get("upStreak"), (int) a.get("upStreak")));
+
+        // ---- 结论 ----
+        String disturbDir = String.valueOf(disturbTrend.getOrDefault("direction", "数据不足"));
+        String greenVerdict = regreening.isEmpty() ? "无同区域多期植被数据"
+                : String.valueOf(regreening.get(0).get("verdict"));
+        StringBuilder conclusion = new StringBuilder();
+        conclusion.append("扰动").append(disturbDir);
+        if (disturbTrend.get("deltaPct") != null) {
+            conclusion.append("（较上期 ").append(disturbTrend.get("deltaPct")).append("%）");
+        }
+        conclusion.append("；植被").append(greenVerdict);
+        if ("扩张".equals(disturbDir) && ("植被退化".equals(greenVerdict) || "未复绿".equals(greenVerdict))) {
+            conclusion.append("——扰动扩张叠加植被未恢复，属需要优先关注的方向");
+        } else if ("扩张".equals(disturbDir)) {
+            conclusion.append("——扰动仍在扩张，但植被同步回升，需确认复绿是否为边坡整地后的短期效果");
+        } else if ("收缩".equals(disturbDir)) {
+            conclusion.append("——扰动范围收敛，符合边采边治的方向");
+        }
+
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("available", true);
+        out.put("periods", periods);
+        out.put("disturbTrend", disturbTrend);
+        out.put("regreening", regreening);
+        out.put("conclusion", conclusion.toString());
+        out.put("hint", periods.size() < 3
+                ? "当前只有 " + periods.size() + " 期数据，趋势与复绿判定的可靠性有限；建议补齐季度/年度影像"
+                : "");
+        return ApiResponse.ok(out);
+    }
+
+    /** 某条记录所属 AOI 的指纹（无指纹时用 id 兜底，避免被误并成同一区域） */
+    private static String sigOf(Extraction e) {
+        String sig = e.getAoiSignature();
+        return (sig == null || sig.isBlank()) ? "single-" + e.getId() : sig;
+    }
+
+    /** 取某条记录所属的期：按月 YYYY-MM / 按年 YYYY */
+    private static String periodOf(Extraction e, boolean byYear) {
         if (e.getAcquisitionDate() != null) {
             String d = e.getAcquisitionDate().toString();
             return byYear ? d.substring(0, 4) : d.substring(0, 7);

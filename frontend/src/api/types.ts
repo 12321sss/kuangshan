@@ -465,3 +465,61 @@ export interface SlopeUnitsResult {
     limitation: string
   }
 }
+
+// ============================================================
+// 空间关系与专项风险（B6/B7/B8/B9/C4/A3）
+// ============================================================
+
+export interface SpatialMetric {
+  label: string
+  value: number | string
+  unit?: string
+  hint?: string
+}
+
+export interface SpatialItem {
+  key: 'pond_in_pit' | 'tailings_water' | 'dump_flow' | 'road_cut' | 'eco_buffer' | 'pit_shape'
+  label: string
+  available: boolean
+  /** 高 / 较高 / 中 / 低 / 不可用 */
+  level: string
+  color: string
+  finding: string
+  advice: string
+  metrics: SpatialMetric[]
+  note?: string
+}
+
+export interface PitShape {
+  id: number
+  areaHa: number
+  perimeterM: number
+  /** 4πA/P²，1=正圆；越低说明边界越曲折、多向扩张 */
+  shapeIndex: number
+  equivRadiusM: number
+  /** 与上一期相比的等效半径推进（米）；无上一期时为 null */
+  advanceM: number | null
+}
+
+export interface SpatialRelationsResult {
+  available: boolean
+  message?: string
+  projectName?: string
+  items?: SpatialItem[]
+  summary?: {
+    total: number
+    available: number
+    high: number
+    higher: number
+    medium: number
+    low: number
+    headline: string
+  }
+  pitShapes?: PitShape[]
+  grid?: { width: number; height: number; mPerPixel: number; zoom: number }
+  imageBase64?: string | null
+  legend?: Array<{ label: string; color: string }>
+  permitSource?: string
+  disclaimer?: string
+  generatedAt?: string
+}

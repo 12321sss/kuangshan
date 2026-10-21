@@ -2,7 +2,8 @@ import http from './http'
 import type {
   AdminUser, Alarm, AreaTimeseriesResult, CrsOption, DisplacementSeries, Extraction, Imagery,
   InterpretTask, OverviewStats, PermCatalog, PitForecast, PitYearly, Project, Role, SafetyEvaluation,
-  SceneItem, ScreenSummary, Sensor, SensorDataPoint, SlopeUnitsResult, Station, TimeSeriesFrame,
+  SceneItem, ScreenSummary, Sensor, SensorDataPoint, SlopeUnitsResult, SpatialRelationsResult, Station,
+  TimeSeriesFrame,
   TimeSeriesGroup, VegetationYearly, WarningRule
 } from './types'
 
@@ -71,6 +72,47 @@ export const stationApi = {
 }
 
 export const analysisApi = {
+  /**
+   * 趋势研判（B4）+ 持续复绿判定（C3）
+   * 结论口径：扰动扩张/收缩、植被"持续复绿"（不等于生态修复成功）
+   */
+  trendJudgement: (projectId?: number): Promise<{
+    available: boolean
+    message?: string
+    periods?: Array<{ period: string; disturbHa: number; pitHa: number; vegHa: number; byType: Record<string, number> }>
+    disturbTrend?: {
+      prevPeriod?: string
+      lastPeriod?: string
+      prevHa?: number
+      lastHa?: number
+      deltaHa?: number
+      deltaPct?: number | null
+      direction: string
+      overallDeltaHa?: number
+      firstPeriod?: string
+      note?: string
+    }
+    regreening?: Array<{
+      signature: string
+      periodCount: number
+      upStreak: number
+      growthPct: number | null
+      verdict: string
+      note: string
+      series: Array<{ period: string; areaHa: number }>
+    }>
+    conclusion?: string
+    hint?: string
+  }> => http.get('/analysis/trend-judgement', { params: { projectId } }),
+  /**
+   * 空间关系与专项风险：坑内积水 / 尾矿水面 / 排土场汇流 / 道路切坡 / 生态缓冲区 / 采坑形态
+   * 六项全部由现成图层 + DEM 叠加得出，不依赖外部数据
+   */
+  spatialRelations: (projectId?: number, bufferKm = 2, slopeCutDeg = 15): Promise<SpatialRelationsResult> =>
+    http.post('/analysis/spatial-relations', null, {
+      params: { projectId, bufferKm, slopeCutDeg },
+      timeout: 180000
+    }),
   /** 地物面积时序（真实解译结果按日期聚合） */
   /**
    * 地物面积时序（存量口径）

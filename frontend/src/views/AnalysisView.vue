@@ -73,6 +73,53 @@
         </div>
       </el-card>
 
+      <!-- 趋势研判：把面积时序翻译成"扩张还是收缩、植被有没有连续回升" -->
+      <el-card shadow="never" class="panel" v-loading="trendLoading">
+        <template #header>
+          <span>趋势研判与复绿判定</span>
+          <span class="unit-note">扰动扩张/收缩 · 植被是否连续回升（≥3 期）</span>
+        </template>
+        <template v-if="trend && trend.available">
+          <div class="trend-conclusion">{{ trend.conclusion }}</div>
+          <div v-if="trend.disturbTrend?.direction" class="trend-row">
+            <el-tag size="small" :type="dirTag(trend.disturbTrend.direction)">{{ trend.disturbTrend.direction }}</el-tag>
+            <span v-if="trend.disturbTrend.prevHa != null">
+              扰动面积 {{ trend.disturbTrend.prevHa }} → {{ trend.disturbTrend.lastHa }} ha
+              <b :class="(trend.disturbTrend.deltaPct || 0) > 0 ? 'up' : 'down'">
+                {{ trend.disturbTrend.deltaPct == null ? '（无法比较）'
+                  : `（${trend.disturbTrend.deltaPct > 0 ? '+' : ''}${trend.disturbTrend.deltaPct}%）` }}
+              </b>
+              <span class="dim">区间 {{ trend.disturbTrend.prevPeriod }} → {{ trend.disturbTrend.lastPeriod }}</span>
+            </span>
+          </div>
+          <el-table v-if="trend.regreening?.length" :data="trend.regreening" size="small" class="trend-table">
+            <el-table-column label="区域指纹" width="130" prop="signature" />
+            <el-table-column label="期数" width="60" prop="periodCount" align="center" />
+            <el-table-column label="连续回升" width="90" align="center">
+              <template #default="{ row }">{{ row.upStreak }} 期</template>
+            </el-table-column>
+            <el-table-column label="累计变化" width="90" align="right">
+              <template #default="{ row }">
+                {{ row.growthPct == null ? '—' : (row.growthPct > 0 ? '+' : '') + row.growthPct + '%' }}
+              </template>
+            </el-table-column>
+            <el-table-column label="判定" width="110">
+              <template #default="{ row }">
+                <el-tag size="small" :type="verdictTag(row.verdict)" effect="plain">{{ row.verdict }}</el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column label="说明" min-width="280" prop="note" show-overflow-tooltip />
+          </el-table>
+          <div v-else class="trend-empty">
+            没有同一区域的连续多期植被数据，暂无法判定复绿
+          </div>
+          <div v-if="trend.hint" class="gap-note">
+            <el-icon><Warning /></el-icon><span>{{ trend.hint }}</span>
+          </div>
+        </template>
+        <el-empty v-else description="还没有足够数据做趋势研判" :image-size="80" />
+      </el-card>
+
       <!-- 地物构成：按指定期次查看（存量指标，不做跨期累加） -->
       <el-card shadow="never" class="panel">
         <template #header>
@@ -324,6 +371,33 @@ async function loadProfile() {
   }
 }
 
+// ---- 趋势研判与复绿判定 ----
+const trend = ref<Awaited<ReturnType<typeof analysisApi.trendJudgement>> | null>(null)
+const trendLoading = ref(false)
+async function loadTrend() {
+  trendLoading.value = true
+  try {
+    trend.value = await analysisApi.trendJudgement(projectStore.currentId ?? undefined)
+  } catch {
+    trend.value = null
+  } finally {
+    trendLoading.value = false
+  }
+}
+/** 扰动方向 → 标签色：扩张用红（要关注），收缩用绿（符合边采边治） */
+function dirTag(dir: string) {
+  if (dir === '扩张') return 'danger'
+  if (dir === '收缩') return 'success'
+  if (dir === '数据不足') return 'info'
+  return 'warning'
+}
+function verdictTag(v: string) {
+  if (v === '植被退化') return 'danger'
+  if (v === '持续复绿') return 'success'
+  if (v === '复绿待观察') return 'warning'
+  return 'info'
+}
+
 // ---- 批量导出全部解译结果 ----
 const exporting = ref(false)
 
@@ -545,6 +619,7 @@ watch(() => projectStore.currentId, () => reload())
 
 onMounted(() => {
   reload()
+  loadTrend()
   window.addEventListener('resize', handleResize)
 })
 
@@ -592,6 +667,18 @@ onBeforeUnmount(() => {
   background: #fffbeb; border: 1px solid #fde68a; border-radius: 8px;
   font-size: 12px; color: #b45309; line-height: 1.6;
 }
+
+/* 趋势研判 */
+.trend-conclusion {
+  font-size: 13px; color: #1f2937; line-height: 1.7;
+  padding: 10px 12px; background: #f6f8fa; border-radius: 8px; margin-bottom: 10px;
+}
+.trend-row { display: flex; align-items: center; gap: 8px; font-size: 12px; color: #4b5563; margin-bottom: 10px; flex-wrap: wrap; }
+.trend-row .up { color: #d32f2f; }
+.trend-row .down { color: #2e7d32; }
+.trend-row .dim { color: #a9aeb8; }
+.trend-table { margin-top: 4px; }
+.trend-empty { font-size: 12px; color: #a9aeb8; padding: 12px 0; }
 
 /* 单区域体检 */
 .profile-kpi { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-bottom: 12px; }

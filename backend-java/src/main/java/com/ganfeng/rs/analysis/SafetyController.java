@@ -415,6 +415,116 @@ public class SafetyController {
     // ------------------------------------------------------------------
 
     /** 去重：同一 (类型 | AOI 指纹) 只保留拍摄日期最新的一条 */
+    /**
+     * 空间关系与专项风险（B6 坑内积水 / B7 尾矿水面 / B8 排土场汇流 / B9 道路切坡 / C4 生态缓冲区 / A3 采坑形态）
+     *
+     * 这六项的共同点是"两个已有图层叠一下就有结论"，不需要新数据源；
+     * 算法放 Python（需要栅格化 + shapely），Java 只负责按当前项目取数。
+     */
+    @PostMapping("/spatial-relations")
+    public ApiResponse<Map<String, Object>> spatialRelations(
+            @RequestParam(required = false) Long projectId,
+            @RequestParam(defaultValue = "2") double bufferKm,
+            @RequestParam(defaultValue = "15") double slopeCutDeg,
+            Authentication auth) {
+
+        boolean isAdmin = guard.roleCodesOf(auth).contains("ADMIN");
+        List<Extraction> all = extractionService.list(projectId, auth.getName(), isAdmin);
+        Map<String, Extraction> latest = dedupLatest(all);
+        if (latest.isEmpty()) {
+            Map<String, Object> empty = new LinkedHashMap<>();
+            empty.put("available", false);
+            empty.put("message", "该项目还没有解译记录。请先在「在线解译」提取采坑、排土场、尾矿、道路、水体、植被。");
+            return ApiResponse.ok(empty);
+        }
+
+        // ---- 分析范围：导入的矿权边界优先，其次项目手圈边界 ----
+        List<List<Double>> permit = new ArrayList<>();
+        if (projectId != null) {
+            Project p = projectService.get(projectId);
+            projectService.requireAccess(projectId, auth.getName(), isAdmin);
+            permit = boundaryController.permitRing(projectId);
+            if (permit.isEmpty()) {
+                permit = ringOf(parseJson(p.getBoundaryJson()), "mining");
+            }
+        }
+
+        // ---- 各类地物：同类型不同 AOI 的记录合并成一组要素 ----
+        Map<String, List<Map<String, Object>>> classes = new LinkedHashMap<>();
+        for (Extraction e : latest.values()) {
+            List<Map<String, Object>> feats = toGeoJsonFeatures(e);
+            if (!feats.isEmpty()) {
+                classes.computeIfAbsent(e.getClassType(), k -> new ArrayList<>()).addAll(feats);
+            }
+        }
+        if (classes.isEmpty()) {
+            Map<String, Object> empty = new LinkedHashMap<>();
+            empty.put("available", false);
+            empty.put("message", "解译记录里没有可用的面要素（可能是几何为空）");
+            return ApiResponse.ok(empty);
+        }
+
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("permit", permit);
+        payload.put("classes", classes);
+        payload.put("prevWater", previousPeriodFeatures(all, "WATER"));
+        payload.put("prevPit", previousPeriodFeatures(all, "PIT"));
+        payload.put("bufferKm", Math.max(0.0, Math.min(bufferKm, 10.0)));
+        payload.put("slopeCutDeg", Math.max(5.0, Math.min(slopeCutDeg, 45.0)));
+        payload.put("zoom", 14);
+        payload.put("maxDim", 768);
+
+        Map<String, Object> data;
+        try {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> resp = rest.postForObject(
+                    inferenceBaseUrl + "/api/v1/spatial/analyze", payload, Map.class);
+            if (resp == null || !Integer.valueOf(0).equals(resp.get("code"))) {
+                return ApiResponse.error(502, "空间分析服务返回异常："
+                        + (resp == null ? "空响应" : resp.get("message")));
+            }
+            @SuppressWarnings("unchecked")
+            Map<String, Object> d = (Map<String, Object>) resp.get("data");
+            data = d;
+        } catch (Exception ex) {
+            return ApiResponse.error(503, "空间分析服务不可用：" + ex.getMessage()
+                    + "（请确认 inference 已启动在 " + inferenceBaseUrl + "）");
+        }
+
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("available", true);
+        out.put("projectName", projectId == null ? "未指定项目" : projectService.get(projectId).getName());
+        out.putAll(data);
+        out.put("permitSource", permit.isEmpty() ? "none" : "aoi_boundary_or_project");
+        out.put("params", Map.of("bufferKm", bufferKm, "slopeCutDeg", slopeCutDeg));
+        out.put("generatedAt", java.time.LocalDateTime.now().toString());
+        return ApiResponse.ok(out);
+    }
+
+    /** 取某类型的"上一期"全部要素（按拍摄期分组，取倒数第二期）——用于水面/采坑变化判断 */
+    private List<Map<String, Object>> previousPeriodFeatures(List<Extraction> all, String classType) {
+        List<Extraction> list = all.stream()
+                .filter(e -> classType.equals(e.getClassType()))
+                .sorted((a, b) -> isNewer(a, b) ? -1 : (isNewer(b, a) ? 1 : 0))
+                .toList();
+        if (list.isEmpty()) return List.of();
+        // 按统计期分组，保持时间倒序
+        Map<String, List<Extraction>> byPeriod = new LinkedHashMap<>();
+        for (Extraction e : list) {
+            byPeriod.computeIfAbsent(periodOf(e), k -> new ArrayList<>()).add(e);
+        }
+        List<Map<String, Object>> out = new ArrayList<>();
+        int idx = 0;
+        for (Map.Entry<String, List<Extraction>> entry : byPeriod.entrySet()) {
+            idx++;
+            if (idx == 2) { // 倒数第二期
+                for (Extraction e : entry.getValue()) out.addAll(toGeoJsonFeatures(e));
+                break;
+            }
+        }
+        return out;
+    }
+
     private Map<String, Extraction> dedupLatest(List<Extraction> all) {
         Map<String, Extraction> latest = new LinkedHashMap<>();
         for (Extraction e : all) {

@@ -280,6 +280,7 @@ const moduleMenus: Record<string, MenuGroup[]> = {
       items: [
         { path: '/analysis/safety', title: '综合安全评估', perm: 'page:analysis' },
         { path: '/analysis/slope', title: '边坡单元', perm: 'page:analysis' },
+        { path: '/analysis/spatial', title: '空间关系', perm: 'page:analysis' },
         { path: '/analysis/terrain', title: '地形分析', perm: 'page:analysis' },
         { path: '/analysis/ecology', title: '生态指数', perm: 'page:analysis' }
       ]
