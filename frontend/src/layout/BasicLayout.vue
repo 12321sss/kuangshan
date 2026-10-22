@@ -238,26 +238,26 @@ const moduleMenus: Record<string, MenuGroup[]> = {
       title: '数据准备',
       items: [
         { path: '/imagery', title: '影像库', perm: 'page:imagery' },
-        { path: '/boundary', title: '边界管理', perm: 'page:imagery' }
+        { path: '/boundary', title: '边界管理', perm: 'page:boundary' }
       ]
     },
     {
       title: '解译作业',
       items: [
         { path: '/remote-extract', title: '在线解译', perm: 'page:extract' },
-        { path: '/classify', title: '监督分类', perm: 'page:extract' },
-        { path: '/extract', title: '本地解译', perm: 'page:extract' }
+        { path: '/classify', title: '监督分类', perm: 'page:classify' },
+        { path: '/extract', title: '本地解译', perm: 'page:extract-local' }
       ]
     },
     {
       title: '持续监测',
-      items: [{ path: '/change-monitor', title: '变化监测', perm: 'page:extract' }]
+      items: [{ path: '/change-monitor', title: '变化监测', perm: 'page:change-monitor' }]
     },
     {
       title: '结果比对',
       items: [
-        { path: '/compare', title: '数据对比', perm: 'page:extract' },
-        { path: '/fusion', title: '结果融合', perm: 'page:analysis' }
+        { path: '/compare', title: '数据对比', perm: 'page:compare' },
+        { path: '/fusion', title: '结果融合', perm: 'page:fusion' }
       ]
     }
   ],
@@ -286,16 +286,16 @@ const moduleMenus: Record<string, MenuGroup[]> = {
     {
       title: '安全与生态评估',
       items: [
-        { path: '/analysis/safety', title: '综合安全评估', perm: 'page:analysis' },
-        { path: '/analysis/slope', title: '边坡单元', perm: 'page:analysis' },
-        { path: '/analysis/spatial', title: '空间关系', perm: 'page:analysis' },
-        { path: '/analysis/terrain', title: '地形分析', perm: 'page:analysis' },
-        { path: '/analysis/ecology', title: '生态指数', perm: 'page:analysis' }
+        { path: '/analysis/safety', title: '综合安全评估', perm: 'page:safety' },
+        { path: '/analysis/slope', title: '边坡单元', perm: 'page:slope' },
+        { path: '/analysis/spatial', title: '空间关系', perm: 'page:spatial' },
+        { path: '/analysis/terrain', title: '地形分析', perm: 'page:terrain' },
+        { path: '/analysis/ecology', title: '生态指数', perm: 'page:ecology' }
       ]
     },
     {
       title: '成果输出',
-      items: [{ path: '/report', title: '报告生成', perm: 'page:analysis' }]
+      items: [{ path: '/report', title: '报告生成', perm: 'page:report' }]
     }
   ],
   platform: [
@@ -313,7 +313,7 @@ const moduleMenus: Record<string, MenuGroup[]> = {
         { path: '/platform/audit-logs', title: '操作日志', perm: 'page:audit-logs' },
         { path: '/platform/dict', title: '数据字典', perm: 'page:dict' },
         { path: '/platform/health', title: '系统健康', perm: 'page:health' },
-        { path: '/platform/trash', title: '回收站', perm: 'page:extract' }
+        { path: '/platform/trash', title: '回收站', perm: 'page:trash' }
       ]
     }
   ]

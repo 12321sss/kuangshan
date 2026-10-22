@@ -189,6 +189,8 @@ export interface Role {
 export interface PermItem {
   code: string
   name: string
+  /** 业务分组（2026-10-22 新增）：角色管理页按此分组渲染勾选矩阵 */
+  group?: string
 }
 
 export interface PermCatalog {

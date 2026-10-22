@@ -45,27 +45,54 @@
         <el-form-item label="说明">
           <el-input v-model="editing.description" />
         </el-form-item>
+        <!-- 页面权限：按业务分组展示，组级可一键全选，避免长列表看不清有哪些 -->
         <el-form-item label="页面权限">
           <div class="perm-box">
             <div class="perm-head">
               <el-checkbox :model-value="allPagesChecked" @change="toggleAllPages">全选</el-checkbox>
+              <span class="perm-count">已选 {{ editing.pagePerms.length }} / {{ catalog?.pages.length || 0 }}</span>
             </div>
             <el-checkbox-group v-model="editing.pagePerms">
-              <el-checkbox v-for="p in catalog?.pages || []" :key="p.code" :value="p.code" class="perm-item">
-                {{ p.name }}
-              </el-checkbox>
+              <div v-for="g in pageGroups" :key="g.name" class="perm-group">
+                <div class="perm-group-head">
+                  <el-checkbox
+                    :model-value="isGroupAll('page', g)"
+                    :indeterminate="isGroupSome('page', g)"
+                    @change="(v: any) => toggleGroup('page', g, v)"
+                  >{{ g.name }}</el-checkbox>
+                </div>
+                <div class="perm-group-items">
+                  <el-checkbox v-for="p in g.items" :key="p.code" :value="p.code" class="perm-item">
+                    {{ p.name }}
+                  </el-checkbox>
+                </div>
+              </div>
             </el-checkbox-group>
           </div>
         </el-form-item>
+
+        <!-- 操作权限：同样分组 -->
         <el-form-item label="操作权限">
           <div class="perm-box">
             <div class="perm-head">
               <el-checkbox :model-value="allActionsChecked" @change="toggleAllActions">全选</el-checkbox>
+              <span class="perm-count">已选 {{ editing.actionPerms.length }} / {{ catalog?.actions.length || 0 }}</span>
             </div>
             <el-checkbox-group v-model="editing.actionPerms">
-              <el-checkbox v-for="a in catalog?.actions || []" :key="a.code" :value="a.code" class="perm-item">
-                {{ a.name }}
-              </el-checkbox>
+              <div v-for="g in actionGroups" :key="g.name" class="perm-group">
+                <div class="perm-group-head">
+                  <el-checkbox
+                    :model-value="isGroupAll('action', g)"
+                    :indeterminate="isGroupSome('action', g)"
+                    @change="(v: any) => toggleGroup('action', g, v)"
+                  >{{ g.name }}</el-checkbox>
+                </div>
+                <div class="perm-group-items">
+                  <el-checkbox v-for="a in g.items" :key="a.code" :value="a.code" class="perm-item">
+                    {{ a.name }}
+                  </el-checkbox>
+                </div>
+              </div>
             </el-checkbox-group>
           </div>
         </el-form-item>
@@ -110,6 +137,48 @@ function toggleAllPages(v: boolean) {
     editing.value.pagePerms = v ? catalog.value.pages.map((p) => p.code) : []
   }
 }
+/** 把权限点按 group 字段折叠成分组列表，保持后端给的顺序 */
+interface PermGroup { name: string; items: { code: string; name: string; group?: string }[] }
+function groupPerms(list: { code: string; name: string; group?: string }[] | undefined): PermGroup[] {
+  const map = new Map<string, { code: string; name: string; group?: string }[]>()
+  for (const it of list || []) {
+    const g = it.group || '其他'
+    if (!map.has(g)) map.set(g, [])
+    map.get(g)!.push(it)
+  }
+  return [...map.entries()].map(([name, items]) => ({ name, items }))
+}
+const pageGroups = computed(() => groupPerms(catalog.value?.pages))
+const actionGroups = computed(() => groupPerms(catalog.value?.actions))
+
+function currentList(kind: 'page' | 'action'): string[] {
+  if (!editing.value) return []
+  return kind === 'page' ? editing.value.pagePerms : editing.value.actionPerms
+}
+function setCurrentList(kind: 'page' | 'action', v: string[]) {
+  if (!editing.value) return
+  if (kind === 'page') editing.value.pagePerms = v
+  else editing.value.actionPerms = v
+}
+function isGroupAll(kind: 'page' | 'action', g: PermGroup): boolean {
+  const cur = currentList(kind)
+  return g.items.length > 0 && g.items.every((i) => cur.includes(i.code))
+}
+function isGroupSome(kind: 'page' | 'action', g: PermGroup): boolean {
+  const cur = currentList(kind)
+  const hit = g.items.filter((i) => cur.includes(i.code)).length
+  return hit > 0 && hit < g.items.length
+}
+/** 组级勾选：全选本组 / 清空本组，不影响其它组 */
+function toggleGroup(kind: 'page' | 'action', g: PermGroup, checked: boolean) {
+  const cur = new Set(currentList(kind))
+  for (const i of g.items) {
+    if (checked) cur.add(i.code)
+    else cur.delete(i.code)
+  }
+  setCurrentList(kind, [...cur])
+}
+
 function toggleAllActions(v: boolean) {
   if (editing.value && catalog.value) {
     editing.value.actionPerms = v ? catalog.value.actions.map((a) => a.code) : []
@@ -193,4 +262,11 @@ onMounted(load)
 
 .perm-head { border-bottom: 1px dashed #eceef2; margin-bottom: 4px; }
 .perm-item { width: 46%; margin-right: 0; }
+.perm-count { margin-left: auto; font-size: 12px; color: #86909c; }
+.perm-group { margin-bottom: 10px; }
+.perm-group-head {
+  font-size: 12px; font-weight: 600; color: #4e5969;
+  padding: 4px 0 2px; border-bottom: 1px dashed #eceef2; margin-bottom: 4px;
+}
+.perm-group-items { display: flex; flex-wrap: wrap; gap: 2px 12px; padding-left: 6px; }
 </style>

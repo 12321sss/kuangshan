@@ -52,8 +52,10 @@ export default defineConfig({
     // 用域名访问（穿透服务）会被拦下并报 Blocked request。
     allowedHosts: TUNNEL ? true : LOCAL_ALLOWED_HOSTS,
 
-    // 穿透走 https 时，浏览器的 HMR ws 要连 443（协议 wss），否则页面正常但热更新失效
-    hmr: TUNNEL ? { protocol: 'wss', clientPort: 443 } : undefined,
+    // HMR 不写死 protocol/clientPort：
+    // 之前配成 wss:443 是为了适配 https 穿透，但副作用是本地用 localhost:5173 打开时，
+    // 浏览器也会去连 wss://localhost:443，控制台持续报错「WebSocket connection failed」。
+    // Vite 默认会按当前页面协议+端口自动推断 ws 地址，穿透场景下同样能正确工作。
 
     proxy: {
       '/api': {

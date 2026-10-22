@@ -38,10 +38,13 @@
     <el-dialog v-model="dialogVisible" :title="isCreate ? '新增用户' : `编辑用户 · ${editing?.username}`" width="460px">
       <el-form v-if="editing" label-width="90px">
         <el-form-item label="用户名" required>
-          <el-input v-model="editing.username" :disabled="!isCreate" placeholder="登录账号，创建后不可改" />
+          <el-input v-model="editing.username" :disabled="!isCreate"
+                    placeholder="登录账号，建议英文/数字，如 yanshi" />
+          <div class="field-hint">登录时输入的就是这个；创建后不可修改</div>
         </el-form-item>
         <el-form-item label="姓名" required>
-          <el-input v-model="editing.displayName" />
+          <el-input v-model="editing.displayName" placeholder="界面上显示的名字，可用中文，如 演示账号" />
+          <div class="field-hint">只用于界面显示，不参与登录</div>
         </el-form-item>
         <el-form-item :label="isCreate ? '初始密码' : '重置密码'" :required="isCreate">
           <el-input v-model="editing.password" type="password" show-password
@@ -130,6 +133,18 @@ async function onSave() {
     ElMessage.warning('初始密码不能为空')
     return
   }
+  // 用户名是登录凭据，限制为英文/数字/下划线/点/中划线。
+  // 之前允许中文，出现过把「用户名」和「姓名」填反、结果登录不上（用户名成了中文、登录输英文）的情况。
+  if (isCreate.value && !/^[A-Za-z0-9_.-]{2,32}$/.test(e.username)) {
+    ElMessage.warning('用户名只能用英文、数字、下划线、点或中划线，2~32 位（如 yanshi）')
+    return
+  }
+  // 用户名是登录凭据，限制为英文/数字/下划线/点/中划线。
+  // 之前允许中文，出现过把「用户名」和「姓名」填反、结果登录不上（用户名成了中文、登录输英文）的情况。
+  if (isCreate.value && !/^[A-Za-z0-9_.-]{2,32}$/.test(e.username)) {
+    ElMessage.warning('用户名只能用英文、数字、下划线、点或中划线，2~32 位（如 yanshi）')
+    return
+  }
   saving.value = true
   try {
     if (isCreate.value) {
@@ -137,7 +152,15 @@ async function onSave() {
     } else {
       await userApi.update(e.username, { displayName: e.displayName, phone: e.phone, role: e.role, status: e.status, newPassword: e.password || undefined })
     }
-    ElMessage.success('已保存（角色/状态变更对方下次操作即生效）')
+    if (isCreate.value) {
+      ElMessage.success(`用户已创建，登录账号是「${e.username}」（不是姓名「${e.displayName}」）`)
+    } else {
+      if (isCreate.value) {
+      ElMessage.success(`用户已创建，登录账号是「${e.username}」（不是姓名「${e.displayName}」）`)
+    } else {
+      ElMessage.success('已保存（角色/状态变更对方下次操作即生效）')
+    }
+    }
     dialogVisible.value = false
     await load()
   } catch (err: any) {
@@ -163,4 +186,5 @@ onMounted(load)
 <style scoped>
 .page-card { border: 1px solid #eceef2; border-radius: 10px; }
 .head { display: flex; align-items: center; justify-content: space-between; }
+.field-hint { font-size: 11px; color: #a9aeb8; line-height: 1.5; margin-top: 2px; }
 </style>
