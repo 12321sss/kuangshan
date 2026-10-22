@@ -18,6 +18,21 @@ export default defineConfig({
     // 结果就是 http://localhost:5173 能开、http://127.0.0.1:5173 打不开（netstat 里只有 [::1]）。
     // 绑 0.0.0.0 后 IPv4 的 127.0.0.1 与局域网 IP 都可访问，方便手机/另一台电脑调试。
     host: '0.0.0.0',
+    // Vite 5+ 的 DNS rebinding 防护：默认只允许 localhost / IP 直连访问。
+    // 一旦用「域名」访问（内网穿透、ngrok、公司域名解析等），就会被拦下并报：
+    //   Blocked request. This host ("xxx") is not allowed.
+    // 这里放行常见穿透服务的域名后缀（前导点表示匹配所有子域）。
+    // 换穿透服务时，把它的域名后缀加进数组即可；仅本地演示可临时改成 true 全放开。
+    allowedHosts: [
+      '.ofalias.net',        // 当前使用的穿透服务
+      '.ngrok.io',
+      '.ngrok-free.app',
+      '.cpolar.top',
+      '.cpolar.cn',
+      '.natappfree.cc',
+      '.trycloudflare.com',
+      '.loca.lt'
+    ],
     proxy: {
       '/api': {
         // 用 127.0.0.1 而不是 localhost：避免代理层再做一次 DNS 解析，
