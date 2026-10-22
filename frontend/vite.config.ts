@@ -3,6 +3,35 @@ import vue from '@vitejs/plugin-vue'
 import cesium from 'vite-plugin-cesium'
 import { fileURLToPath, URL } from 'node:url'
 
+/**
+ * 演示模式（内网穿透给外部试用）
+ *
+ * 用法：命令行设置 TUNNEL=1 后启动
+ *   PowerShell:  $env:TUNNEL=1; npm run dev
+ *   Git Bash  :  TUNNEL=1 npm run dev
+ *
+ * 开启后会做两件事：
+ *  1. allowedHosts 全放开 —— 穿透服务给的域名随机，省得每次改白名单
+ *  2. HMR 改走 wss:443 —— https 穿透域名下前端页面的 ws 才能连上（否则只是没热更新）
+ *
+ * 不开这个开关时，本地开发保持默认行为（只听 localhost + IP、HMR 用 5173）。
+ */
+const TUNNEL = process.env.TUNNEL === '1'
+
+// 本地开发白名单：列出常见穿透服务的域名后缀（前导点匹配所有子域）
+const LOCAL_ALLOWED_HOSTS = [
+  '.ofalias.net',
+  '.ngrok.io',
+  '.ngrok-free.app',
+  '.ngrok-free.dev',
+  '.cpolar.top',
+  '.cpolar.cn',
+  '.natappfree.cc',
+  '.trycloudflare.com',
+  '.loca.lt',
+  '.serveo.net'
+]
+
 // 开发服务器：/api 代理到 Java 业务服务，避免跨域，Cookie 同源可用
 export default defineConfig({
   plugins: [vue(), cesium()],
@@ -18,21 +47,14 @@ export default defineConfig({
     // 结果就是 http://localhost:5173 能开、http://127.0.0.1:5173 打不开（netstat 里只有 [::1]）。
     // 绑 0.0.0.0 后 IPv4 的 127.0.0.1 与局域网 IP 都可访问，方便手机/另一台电脑调试。
     host: '0.0.0.0',
-    // Vite 5+ 的 DNS rebinding 防护：默认只允许 localhost / IP 直连访问。
-    // 一旦用「域名」访问（内网穿透、ngrok、公司域名解析等），就会被拦下并报：
-    //   Blocked request. This host ("xxx") is not allowed.
-    // 这里放行常见穿透服务的域名后缀（前导点表示匹配所有子域）。
-    // 换穿透服务时，把它的域名后缀加进数组即可；仅本地演示可临时改成 true 全放开。
-    allowedHosts: [
-      '.ofalias.net',        // 当前使用的穿透服务
-      '.ngrok.io',
-      '.ngrok-free.app',
-      '.cpolar.top',
-      '.cpolar.cn',
-      '.natappfree.cc',
-      '.trycloudflare.com',
-      '.loca.lt'
-    ],
+
+    // Vite 5+ 的 DNS rebinding 防护：默认只允许 localhost / IP 直连。
+    // 用域名访问（穿透服务）会被拦下并报 Blocked request。
+    allowedHosts: TUNNEL ? true : LOCAL_ALLOWED_HOSTS,
+
+    // 穿透走 https 时，浏览器的 HMR ws 要连 443（协议 wss），否则页面正常但热更新失效
+    hmr: TUNNEL ? { protocol: 'wss', clientPort: 443 } : undefined,
+
     proxy: {
       '/api': {
         // 用 127.0.0.1 而不是 localhost：避免代理层再做一次 DNS 解析，
