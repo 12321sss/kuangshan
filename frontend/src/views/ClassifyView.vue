@@ -32,6 +32,7 @@
             <span>影像与样本点</span>
             <div class="head-right">
               <span class="card-hint">左键点选 · 滚轮缩放 · 右键拖动</span>
+              <el-button link type="primary" size="small" :disabled="!image" @click="resetToNative">1:1</el-button>
               <el-button link type="primary" size="small" :disabled="!image" @click="fitToBox">适应窗口</el-button>
             </div>
           </div>
@@ -51,7 +52,7 @@
             选好分析区与日期后点「加载影像」，然后在图上点选样本
           </div>
           <div v-if="loadingImg" class="viewer-empty">影像加载中…（首次需下载瓦片，约 20-60 秒）</div>
-          <div class="zoom-tip">×{{ scale.toFixed(1) }}</div>
+          <div class="zoom-tip">{{ scale === 1 ? '1:1 原始像素' : '×' + scale.toFixed(1) }}</div>
         </div>
 
         <!-- 分辨率诊断：区域太小或影像太粗时，选点会很不准，必须提前说清 -->
@@ -316,16 +317,29 @@ async function onImgLoad() {
   if (!el) return
   imgNatural.value = { w: el.naturalWidth, h: el.naturalHeight }
   await nextTick()
-  fitToBox()
+  // 默认按原始分辨率 1:1 显示（1 影像像元 = 1 屏幕像素），不做任何拉伸
+  resetToNative()
 }
 
-/** 让影像铺满可视区：默认 1 倍时小区域只有几十像素，用户根本没法点 */
+/** 恢复 1:1 原始像素显示并居中（比容器大时左上对齐，靠右键拖动看其余部分） */
+function resetToNative() {
+  const box = boxRef.value?.getBoundingClientRect()
+  const img = imgRef.value
+  scale.value = 1
+  if (!box || !img) return
+  offset.value = {
+    x: img.naturalWidth <= box.width ? (box.width - img.naturalWidth) / 2 : 0,
+    y: img.naturalHeight <= box.height ? (box.height - img.naturalHeight) / 2 : 0
+  }
+}
+
+/** 让影像铺满可视区（可选，默认不用）：把整幅图缩放到可视区内 */
 function fitToBox() {
   const box = boxRef.value?.getBoundingClientRect()
   const img = imgRef.value
   if (!box || !img || !img.naturalWidth) return
   const s = Math.min((box.width - 24) / img.naturalWidth, (box.height - 24) / img.naturalHeight)
-  scale.value = Math.max(1, Math.min(12, s))
+  scale.value = Math.max(0.2, Math.min(12, s))
   offset.value = {
     x: (box.width - img.naturalWidth * scale.value) / 2,
     y: (box.height - img.naturalHeight * scale.value) / 2
@@ -348,16 +362,16 @@ const resHint = computed(() => {
   const hPx = nat.h
   resWarn.value = wPx < 60 || hPx < 60
   if (resWarn.value) {
-    return `本区域只有 ${wPx}×${hPx} 像素（每像素约 ${mPerPx.toFixed(1)} m）。区域太小，选点会很粗——建议导入更大范围的边界（如整个矿区），或改用更高分辨率影像。`
+    return `原始分辨率 ${wPx}×${hPx} 像素，每像素约 ${mPerPx.toFixed(1)} m，已按 1:1 显示。区域太小，选点会很粗——建议导入更大范围的边界（如整个矿区），或改用更高分辨率影像。注意：放大只是把像元画大，不会增加细节。`
   }
-  return `影像 ${wPx}×${hPx} 像素，每像素约 ${mPerPx.toFixed(1)} m。样本点请分散在各类图斑内部，避开边缘 2~3 个像元。`
+  return `原始分辨率 ${wPx}×${hPx} 像素，每像素约 ${mPerPx.toFixed(1)} m，已按 1:1 显示。样本点请分散在各类图斑内部，避开边缘 2~3 个像元。`
 })
 
 // ---- 缩放与平移 ----
 function onWheel(e: WheelEvent) {
   if (!image.value) return
   const delta = e.deltaY < 0 ? 1.2 : 1 / 1.2
-  const next = Math.min(10, Math.max(1, scale.value * delta))
+  const next = Math.min(12, Math.max(0.2, scale.value * delta))
   const box = boxRef.value?.getBoundingClientRect()
   if (!box) return
   const mx = e.clientX - box.left
