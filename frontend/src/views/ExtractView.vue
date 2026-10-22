@@ -25,6 +25,7 @@
             :value="b.id"
           />
         </el-select>
+        <el-button size="small" :disabled="aoi.length < 3" @click="openSaveBoundary">存为边界</el-button>
         <span v-if="aoiAreaText" class="aoi-info">AOI 面积：{{ aoiAreaText }}</span>
       </div>
       <div v-if="!hasToken" class="token-notice">未配置天地图密钥，底图未加载</div>
@@ -139,6 +140,31 @@
       />
     </div>
   </div>
+    <!-- 存为边界 -->
+    <el-dialog v-model="saveBoundaryVisible" title="保存为边界" width="440px">
+      <el-form label-width="88px" size="small">
+        <el-form-item label="边界名称">
+          <el-input v-model="saveBoundaryName" placeholder="留空自动按日期命名" maxlength="60" show-word-limit />
+        </el-form-item>
+        <el-form-item label="用途">
+          <el-radio-group v-model="saveBoundaryType">
+            <el-radio-button value="PERMIT">矿权范围</el-radio-button>
+            <el-radio-button value="DISTURBANCE">实际扰动</el-radio-button>
+            <el-radio-button value="ECO">生态缓冲区</el-radio-button>
+          </el-radio-group>
+        </el-form-item>
+        <el-form-item label="当前 AOI">
+          <span class="save-area">{{ aoi.length }} 个顶点 · {{ aoiAreaText || '—' }}</span>
+        </el-form-item>
+      </el-form>
+      <div class="save-tip">
+        用途决定后续能被哪些功能使用：矿权范围会成为越界检测基准；实际扰动边界不能当矿权用。
+      </div>
+      <template #footer>
+        <el-button size="small" @click="saveBoundaryVisible = false">取消</el-button>
+        <el-button size="small" type="primary" :loading="savingBoundary" @click="doSaveBoundary">保存</el-button>
+      </template>
+    </el-dialog>
 </template>
 
 <script setup lang="ts">
@@ -319,6 +345,44 @@ async function loadBoundaryOptions() {
     boundaryOptions.value = []
   } finally {
     boundaryLoading.value = false
+  }
+}
+
+// ---- 存为边界 ----
+const saveBoundaryVisible = ref(false)
+const saveBoundaryName = ref('')
+const saveBoundaryType = ref<'PERMIT' | 'DISTURBANCE' | 'ECO'>('PERMIT')
+const savingBoundary = ref(false)
+
+function openSaveBoundary() {
+  if (aoi.value.length < 3) {
+    ElMessage.warning('请先圈选 AOI 或从边界加载一个范围')
+    return
+  }
+  saveBoundaryName.value = ''
+  saveBoundaryType.value = 'PERMIT'
+  saveBoundaryVisible.value = true
+}
+
+async function doSaveBoundary() {
+  const pid = projectStore.currentId
+  if (!pid) return
+  savingBoundary.value = true
+  try {
+    const res = await boundaryApi.saveDrawn({
+      projectId: pid,
+      name: saveBoundaryName.value.trim() || undefined,
+      boundaryType: saveBoundaryType.value,
+      ring: aoi.value
+    })
+    ElMessage.success(`已保存边界「${res.saved.name}」（${res.saved.areaHa} ha）`)
+    saveBoundaryVisible.value = false
+    // 刷新下拉，刚存的边界立刻可用
+    await loadBoundaryOptions()
+  } catch (e: any) {
+    ElMessage.error(e?.message || '保存失败')
+  } finally {
+    savingBoundary.value = false
   }
 }
 
@@ -680,6 +744,8 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
+.save-area { font-size: 12px; color: #4b5563; }
+.save-tip { font-size: 11px; color: #b45309; line-height: 1.6; }
 .extract-page {
   display: grid;
   grid-template-columns: 1fr 360px;

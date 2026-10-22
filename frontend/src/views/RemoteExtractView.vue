@@ -29,6 +29,8 @@
         </el-select>
         <!-- 复用上次 AOI：保证与历史记录的区域指纹一致，时序/对比才能正确匹配 -->
         <el-button size="small" :disabled="!lastAoiAvailable" @click="reuseLastAoi">复用上次</el-button>
+        <!-- 圈出来的范围要能沉淀成正式边界，否则下次还得重圈（点位一偏时序就串不起来） -->
+        <el-button size="small" :disabled="aoi.length < 3" @click="openSaveBoundary">存为边界</el-button>
         <span v-if="aoiAreaText" class="aoi-info">AOI {{ aoiAreaText }}</span>
         <el-divider direction="vertical" />
         <el-button size="small" :loading="demoLoading" @click="loadDemo">一键载入演示数据</el-button>
@@ -116,6 +118,9 @@
             <div class="si-row"><span>景 ID</span><code>{{ sceneInfo.scene_id }}</code></div>
             <div class="si-row"><span>日期</span>{{ (sceneInfo.datetime || '').slice(0, 10) }}</div>
             <div class="si-row"><span>云量</span><span :style="{ color: cloudWarn ? '#f59e0b' : '#4e5969' }">{{ sceneInfo.cloud_cover }}%{{ cloudWarn ? ' ⚠' : '' }}</span></div>
+            <!-- 分辨率要写在明面上：Sentinel-2 最高就是 10m，比底图（0.5-2m）粗是正常的 -->
+            <div class="si-row"><span>分辨率</span><span>10 m／像素（Sentinel-2 上限）</span></div>
+            <div class="si-row res-note">底图越清是它的分辨率更高，不代表本图被压缩过</div>
           </div>
           <!-- 云量偏高提示 -->
           <el-alert v-if="cloudWarn" type="warning" :closable="false" style="margin-top:8px"
@@ -408,6 +413,31 @@
       <div v-else class="empty">请先在记录里勾选两条加入播放清单</div>
     </el-dialog>
   </div>
+    <!-- 存为边界 -->
+    <el-dialog v-model="saveBoundaryVisible" title="保存为边界" width="440px">
+      <el-form label-width="88px" size="small">
+        <el-form-item label="边界名称">
+          <el-input v-model="saveBoundaryName" placeholder="留空自动按日期命名" maxlength="60" show-word-limit />
+        </el-form-item>
+        <el-form-item label="用途">
+          <el-radio-group v-model="saveBoundaryType">
+            <el-radio-button value="PERMIT">矿权范围</el-radio-button>
+            <el-radio-button value="DISTURBANCE">实际扰动</el-radio-button>
+            <el-radio-button value="ECO">生态缓冲区</el-radio-button>
+          </el-radio-group>
+        </el-form-item>
+        <el-form-item label="当前 AOI">
+          <span class="save-area">{{ aoi.length }} 个顶点 · {{ aoiAreaText || '—' }}</span>
+        </el-form-item>
+      </el-form>
+      <div class="save-tip">
+        用途决定后续能被哪些功能使用：矿权范围会成为越界检测基准；实际扰动边界不能当矿权用。
+      </div>
+      <template #footer>
+        <el-button size="small" @click="saveBoundaryVisible = false">取消</el-button>
+        <el-button size="small" type="primary" :loading="savingBoundary" @click="doSaveBoundary">保存</el-button>
+      </template>
+    </el-dialog>
 </template>
 
 <script setup lang="ts">
@@ -673,6 +703,44 @@ async function loadBoundaryOptions() {
     boundaryOptions.value = []
   } finally {
     boundaryLoading.value = false
+  }
+}
+
+// ---- 存为边界 ----
+const saveBoundaryVisible = ref(false)
+const saveBoundaryName = ref('')
+const saveBoundaryType = ref<'PERMIT' | 'DISTURBANCE' | 'ECO'>('PERMIT')
+const savingBoundary = ref(false)
+
+function openSaveBoundary() {
+  if (aoi.value.length < 3) {
+    ElMessage.warning('请先圈选 AOI 或从边界加载一个范围')
+    return
+  }
+  saveBoundaryName.value = ''
+  saveBoundaryType.value = 'PERMIT'
+  saveBoundaryVisible.value = true
+}
+
+async function doSaveBoundary() {
+  const pid = projectStore.currentId
+  if (!pid) return
+  savingBoundary.value = true
+  try {
+    const res = await boundaryApi.saveDrawn({
+      projectId: pid,
+      name: saveBoundaryName.value.trim() || undefined,
+      boundaryType: saveBoundaryType.value,
+      ring: aoi.value
+    })
+    ElMessage.success(`已保存边界「${res.saved.name}」（${res.saved.areaHa} ha）`)
+    saveBoundaryVisible.value = false
+    // 刷新下拉，刚存的边界立刻可用
+    await loadBoundaryOptions()
+  } catch (e: any) {
+    ElMessage.error(e?.message || '保存失败')
+  } finally {
+    savingBoundary.value = false
   }
 }
 
@@ -1834,6 +1902,8 @@ function ringAreaHa(ring: number[][]): number {
 </script>
 
 <style scoped>
+.save-area { font-size: 12px; color: #4b5563; }
+.save-tip { font-size: 11px; color: #b45309; line-height: 1.6; }
 .rs-page {
   display: grid;
   grid-template-columns: 1fr 360px;
@@ -1893,6 +1963,7 @@ function ringAreaHa(ring: number[][]): number {
 
 .scene-info { margin-top: 10px; font-size: 12px; color: #4e5969; }
 .si-row { display: flex; justify-content: space-between; padding: 2px 0; }
+.si-row.res-note { display: block; font-size: 10px; color: #a9aeb8; line-height: 1.5; padding-top: 3px; }
 .si-row code { font-size: 11px; color: #0d9488; }
 
 .class-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }

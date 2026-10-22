@@ -116,6 +116,107 @@ public class AoiBoundaryController {
                             String sourceCrs, String name,
                             Boolean merge) {}
 
+    /** 页面上手圈出来的边界（在线解译/本地解译的 AOI 直接存进边界库） */
+    public record SaveDrawnReq(Long projectId, String name, String boundaryType,
+                               List<List<Double>> ring) {}
+
+    /**
+     * 把手圈/导入的 AOI 存为正式边界
+     *
+     * 场景：客户口头给个范围、或者现场在地图上圈了一下，这个圈应该能沉淀下来，
+     * 后面查影像、做评估、做越界检测都能直接复用，不必每次重圈（重圈的点位必然有偏差，
+     * 区域指纹对不上，时序就串不起来）。
+     *
+     * 面积在服务端按中心纬度做等距近似计算，保证与导入的边界口径一致。
+     */
+    @PostMapping("/save")
+    public ApiResponse<Map<String, Object>> saveDrawn(@RequestBody SaveDrawnReq req,
+                                                      Authentication auth) {
+        if (req.projectId() == null) throw new BizException(400, "缺少项目参数");
+        guard.requireAccess(req.projectId(), auth);
+        guard.require(auth, "action:imagery-manage");
+
+        List<List<Double>> ring = req.ring();
+        if (ring == null || ring.size() < 3) {
+            throw new BizException(400, "圈选至少需要 3 个点");
+        }
+        // 去重相邻重复点并闭合（Cesium/shapely 都要求首尾一致）
+        List<List<Double>> pts = new ArrayList<>();
+        for (List<Double> p : ring) {
+            if (p == null || p.size() < 2) continue;
+            double lng = p.get(0), lat = p.get(1);
+            if (lng < -180 || lng > 180 || lat < -90 || lat > 90) {
+                throw new BizException(400, "坐标超出合法经纬度范围，请重新圈选");
+            }
+            if (!pts.isEmpty()) {
+                List<Double> last = pts.get(pts.size() - 1);
+                if (Math.abs(last.get(0) - lng) < 1e-9 && Math.abs(last.get(1) - lat) < 1e-9) {
+                    continue;
+                }
+            }
+            pts.add(List.of(round6(lng), round6(lat)));
+        }
+        if (pts.size() < 3) throw new BizException(400, "有效顶点不足 3 个");
+        List<Double> first = pts.get(0);
+        List<Double> last = pts.get(pts.size() - 1);
+        if (!first.get(0).equals(last.get(0)) || !first.get(1).equals(last.get(1))) {
+            pts.add(List.of(first.get(0), first.get(1)));
+        }
+
+        String type = (req.boundaryType() == null || req.boundaryType().isBlank())
+                ? "PERMIT" : req.boundaryType().trim().toUpperCase();
+        if (!VALID_TYPES.contains(type)) {
+            throw new BizException(400, "边界类型只能是 PERMIT / DISTURBANCE / ECO");
+        }
+        double areaHa = ringAreaHa(pts);
+        if (areaHa <= 0) throw new BizException(400, "边界面积为 0，请检查是否为一个有效的面");
+
+        String name = (req.name() == null || req.name().isBlank())
+                ? "圈选边界-" + java.time.LocalDate.now() : req.name().trim();
+
+        Map<String, Object> geom = new LinkedHashMap<>();
+        geom.put("outer", pts);
+        geom.put("holes", List.of());
+
+        AoiBoundary b = new AoiBoundary(req.projectId(), trim(name, 120), type,
+                writeJson(geom), round4(areaHa), pts.size(),
+                "DRAW", "EPSG:4326", "页面圈选", null, auth.getName());
+        repo.save(b);
+
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("saved", brief(b));
+        out.put("count", 1);
+        out.put("sourceFormat", "DRAW");
+        out.put("sourceCrs", "EPSG:4326");
+        out.put("boundaryType", type);
+        out.put("warnings", "");
+        return ApiResponse.ok(out);
+    }
+
+    /** 经纬度环面积（公顷）：按中心纬度做等距近似，与 Python 侧口径一致 */
+    private static double ringAreaHa(List<List<Double>> ring) {
+        if (ring.size() < 3) return 0;
+        double latSum = 0;
+        for (List<Double> p : ring) latSum += p.get(1);
+        double lat0 = latSum / ring.size();
+        double kx = 111320.0 * Math.cos(Math.toRadians(lat0));
+        double ky = 110540.0;
+        double sum = 0;
+        for (int i = 0; i < ring.size(); i++) {
+            List<Double> a = ring.get(i);
+            List<Double> b2 = ring.get((i + 1) % ring.size());
+            double x1 = a.get(0) * kx, y1 = a.get(1) * ky;
+            double x2 = b2.get(0) * kx, y2 = b2.get(1) * ky;
+            sum += x1 * y2 - x2 * y1;
+        }
+        return Math.abs(sum) / 2.0 / 10000.0;
+    }
+
+    private static double round6(double v) {
+        return Math.round(v * 1e6) / 1e6;
+    }
+
+
     /**
      * 导入边界文件
      *

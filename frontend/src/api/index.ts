@@ -516,5 +516,20 @@ export const boundaryApi = {
     boundaryType: string
   }> => http.post('/aoi-boundaries/import', req, { timeout: 180000 }),
 
+  /** 把手圈/当前的 AOI 存为正式边界（在线解译、本地解译页的「存为边界」） */
+  saveDrawn: (req: {
+    projectId: number
+    name?: string
+    boundaryType: 'PERMIT' | 'DISTURBANCE' | 'ECO'
+    ring: number[][]
+  }): Promise<{
+    saved: AoiBoundaryItem
+    count: number
+    sourceFormat: string
+    sourceCrs: string
+    boundaryType: string
+    warnings: string
+  }> => http.post('/aoi-boundaries/save', req),
+
   remove: (id: number): Promise<void> => http.delete(`/aoi-boundaries/${id}`)
 }
