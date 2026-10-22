@@ -129,7 +129,7 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
-import { analysisApi, overviewApi } from '@/api'
+import { extractionApi, analysisApi, overviewApi } from '@/api'
 import { reportApi } from '@/api/sentinel'
 import { useProjectStore } from '@/stores/project'
 import { haToKm2 } from '@/utils/format'
@@ -222,8 +222,26 @@ async function downloadReport(projectName: string): Promise<void> {
     }
   }
 
+  // 解译明细进附录：客户核对与审计时会看"每条记录什么方法、多少面积"
+  let extractions: any[] = []
+  try {
+    const rows = await extractionApi.list(projectStore.currentId ?? undefined)
+    extractions = rows.map((r) => ({
+      acquisitionDate: r.acquisitionDate,
+      classType: r.classType,
+      method: r.method || 'INDEX',
+      extractAreaHa: r.extractAreaHa,
+      coveragePct: r.coveragePct,
+      satellite: r.satellite,
+      accuracyJson: r.accuracyJson || null
+    }))
+  } catch {
+    extractions = []
+  }
+
   const res = await reportApi.generate({
     projectName,
+    extractions,
     timeseries: series.value,
     summary: summary.value.classes,
     forecast: forecast.value || {},

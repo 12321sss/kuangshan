@@ -75,6 +75,39 @@
                 />
               </el-form-item>
 
+              <!-- 自动识别结果：GeoTIFF 自带这些信息，不用手填手画 -->
+              <div v-if="probing" class="probe-loading">
+                <el-icon class="is-loading"><Loading /></el-icon> 正在读取影像自带信息…
+              </div>
+              <el-descriptions
+                v-if="probeInfo && !probeInfo.error"
+                :column="1"
+                size="small"
+                border
+                class="probe-desc"
+              >
+                <template #title>
+                  <span class="probe-title">已自动识别</span>
+                  <span class="probe-title-sub">影像已贴到地图上，可直接上传</span>
+                </template>
+                <el-descriptions-item label="坐标系">{{ probeInfo.crs || '未定义' }}</el-descriptions-item>
+                <el-descriptions-item label="影像尺寸">
+                  {{ probeInfo.width }} × {{ probeInfo.height }} 像素 · {{ probeInfo.bandCount }} 波段
+                </el-descriptions-item>
+                <el-descriptions-item label="地面分辨率">约 {{ probeInfo.resolutionM }} m</el-descriptions-item>
+                <el-descriptions-item label="覆盖范围">
+                  {{ probeInfo.areaKm2 }} km²
+                  <span class="probe-hint">已自动画框并定位</span>
+                </el-descriptions-item>
+                <el-descriptions-item label="拍摄日期">
+                  {{ probeInfo.acquisitionDate }}
+                  <span class="probe-hint">{{ probeInfo.dateSource }}</span>
+                </el-descriptions-item>
+                <el-descriptions-item v-if="(probeInfo.warnings || []).length" label="提示">
+                  <span v-for="(w, i) in probeInfo.warnings" :key="i" class="probe-warn">{{ w }}</span>
+                </el-descriptions-item>
+              </el-descriptions>
+
               <el-form-item label="显示名称">
                 <el-input v-model="form.name" placeholder="默认用原文件名" clearable />
               </el-form-item>
@@ -331,10 +364,11 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { Loading } from '@element-plus/icons-vue'
 import {
   Viewer, Cartesian3, Color, ImageryLayer, Entity, ScreenSpaceEventHandler,
   ScreenSpaceEventType, Cartographic, CallbackProperty, PolygonHierarchy,
-  Rectangle, Math as CesiumMath
+  Rectangle, SingleTileImageryProvider, Math as CesiumMath
 } from 'cesium'
 import { extractionApi, imageryApi } from '@/api'
 import { haToKm2 } from '@/utils/format'
@@ -387,6 +421,11 @@ const drawing = ref(false)
 const draftPts = ref<number[][]>([])
 /** 草稿范围外接矩形 [w,s,e,n]，上传时随请求提交（统一 WGS84） */
 const draftBounds = ref<number[]>([])
+/** 自动识别的结果（展示给用户核对） */
+const probeInfo = ref<any>(null)
+const probing = ref(false)
+/** probe 阶段已存的临时文件，上传时复用 */
+const detectedPath = ref('')
 let draftEntity: Entity | null = null
 let sceneEntity: Entity | null = null
 const footprintEntities = new Map<number, Entity>()
@@ -600,6 +639,7 @@ function updateDraft() {
 }
 
 function clearDraft() {
+  removeImageryPreview()
   draftPts.value = []
   draftBounds.value = []
   if (viewer && draftEntity) {
@@ -614,6 +654,92 @@ function onFileChange(e: Event) {
   const input = e.target as HTMLInputElement
   form.file = input.files?.[0] ?? null
   if (form.file && !form.name) form.name = form.file.name
+  if (form.file) probeFile()
+}
+
+/** 影像自带坐标与日期：选完文件自动读出来填表、并把范围画到地图上 */
+async function probeFile() {
+  if (!form.file) return
+  probing.value = true
+  probeInfo.value = null
+  try {
+    const meta = await imageryApi.probe(form.file)
+    if (meta.error) {
+      ElMessage.warning(`未能自动识别：${meta.error}`)
+      return
+    }
+    probeInfo.value = meta
+    detectedPath.value = meta.storedPath || ''
+
+    // 1) 坐标系
+    if (meta.crs) form.crs = meta.crs
+    // 2) 日期
+    if (meta.acquisitionDate) form.acquisitionDate = meta.acquisitionDate
+    // 3) 分辨率
+    if (meta.resolutionM) form.resolutionM = normalizeRes(meta.resolutionM)
+    // 4) 卫星
+    if (meta.satellite === 'GF7' || meta.satellite === 'GF2') form.source = meta.satellite
+    // 5) 范围 → 自动画矩形并飞过去
+    if (meta.bounds) {
+      const b = meta.bounds
+      draftPts.value = [
+        [b.west, b.south], [b.east, b.south], [b.east, b.north], [b.west, b.north]
+      ]
+      updateDraft()
+      flyToBounds(b)
+    }
+    showImageryPreview(meta)
+    const dateWarn = meta.dateSource && meta.dateSource.includes('请核对') ? '（日期建议核对）' : ''
+    ElMessage.success(
+      `已识别：${meta.crs || '无坐标系'} · ${meta.width}×${meta.height} · ${meta.bandCount} 波段 · 约 ${meta.resolutionM} m${dateWarn}`
+    )
+  } catch (err: any) {
+    ElMessage.warning(err?.message || '自动识别失败，可手动填写')
+  } finally {
+    probing.value = false
+  }
+}
+
+/** 分辨率下拉里没有精确值时按最近档位收口 */
+function normalizeRes(v: number) {
+  const options = [0.8, 2, 10, 30]
+  return options.reduce((a, b) => (Math.abs(b - v) < Math.abs(a - v) ? b : a), options[0])
+}
+
+/** 影像预览图层：把 probe 生成的 PNG 按真实范围贴到地球上（用户要"看到影像"） */
+let previewLayer: ImageryLayer | null = null
+
+function showImageryPreview(meta: any) {
+  if (!viewer || !meta?.bounds || !meta?.previewBase64) return
+  removeImageryPreview()
+  const b = meta.bounds
+  previewLayer = viewer.imageryLayers.addImageryProvider(
+    new SingleTileImageryProvider({
+      url: 'data:image/png;base64,' + meta.previewBase64,
+      rectangle: Rectangle.fromDegrees(b.west, b.south, b.east, b.north)
+    })
+  )
+  viewer.scene.requestRender()
+}
+
+function removeImageryPreview() {
+  if (previewLayer && viewer) {
+    viewer.imageryLayers.remove(previewLayer, true)
+    previewLayer = null
+    viewer.scene.requestRender()
+  }
+}
+
+function flyToBounds(b: { west: number; south: number; east: number; north: number }) {
+  if (!viewer) return
+  const cx = (b.west + b.east) / 2
+  const cy = (b.south + b.north) / 2
+  const span = Math.max(b.east - b.west, b.north - b.south)
+  viewer.camera.flyTo({
+    destination: Cartesian3.fromDegrees(cx, cy, Math.max(1500, span * 111000 * 1.8)),
+    orientation: { heading: 0, pitch: CesiumMath.toRadians(-60) },
+    duration: 1.0
+  })
 }
 
 async function doUpload() {
@@ -627,7 +753,8 @@ async function doUpload() {
       crs: form.crs,
       acquisitionDate: form.acquisitionDate,
       resolutionM: form.resolutionM,
-      bounds: draftBounds.value
+      bounds: draftBounds.value,
+      existingPath: detectedPath.value || undefined
     })
     ElMessage.success(`影像已入库：${created.name}，正在进入提取…`)
     clearDraft()
@@ -635,6 +762,8 @@ async function doUpload() {
     if (fileInput.value) fileInput.value.value = ''
     form.name = ''
     form.acquisitionDate = null
+    probeInfo.value = null
+    detectedPath.value = ''
     await loadImagery()
     // 上传后直接跳到提取页并带上影像，省得手动切页面再选一遍
     goExtract(created.id)
@@ -794,6 +923,33 @@ async function saveMeta() {
   }
 }
 </script>
+
+/* 自动识别结果 */
+.probe-desc { margin: 0 0 12px; }
+.probe-desc :deep(.el-descriptions__header) { margin-bottom: 6px; }
+.probe-title { font-size: 12px; font-weight: 600; color: #0f766e; }
+.probe-title-sub { font-size: 11px; color: #a9aeb8; margin-left: 8px; font-weight: 400; }
+.probe-desc :deep(.el-descriptions__label) { width: 76px; color: #6b7280; font-size: 11px; }
+.probe-desc :deep(.el-descriptions__content) { font-size: 12px; color: #1f2937; }
+.probe-hint { font-size: 10px; color: #a9aeb8; margin-left: 6px; }
+.probe-loading {
+  display: flex; align-items: center; gap: 6px;
+  margin-bottom: 10px; padding: 8px 10px; border-radius: 6px;
+  background: #f8fafb; border: 1px solid #eef0f3; font-size: 12px; color: #6b7280;
+}
+.probe-warn { display: block; font-size: 10px; color: #b45309; line-height: 1.5; }
+
+/* 旧样式（保留避免影响其它引用） */
+.probe-box {
+  margin: 0 0 10px; padding: 8px 10px; border-radius: 6px;
+  background: #f0fdfa; border: 1px solid #ccfbf1; font-size: 12px; color: #0f766e;
+}
+.probe-box.loading { color: #6b7280; background: #f8fafb; border-color: #eef0f3; }
+.probe-title { font-weight: 600; margin-bottom: 4px; }
+.probe-row { display: flex; justify-content: space-between; gap: 10px; padding: 1px 0; }
+.probe-row b { color: #134e4a; font-weight: 500; }
+.probe-src { font-size: 10px; color: #6b7280; margin-left: 6px; font-weight: 400; }
+.probe-warn { font-size: 10px; color: #b45309; margin-top: 3px; line-height: 1.5; }
 
 <style scoped>
 /* 影像档案元数据弹窗 */

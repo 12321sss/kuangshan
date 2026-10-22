@@ -194,6 +194,10 @@ export interface Extraction {
   aoiAreaHa: number
   extractAreaHa: number
   coveragePct: number
+  /** 解译方法：INDEX 指数阈值 / SUPERVISED 监督分类 / FUSION 融合结果 */
+  method?: 'INDEX' | 'SUPERVISED' | 'FUSION' | string
+  /** 精度或融合元信息（JSON 字符串） */
+  accuracyJson?: string | null
   createdBy?: string
   createdAt: string
   /** 软删除标记：true 表示在回收站 */

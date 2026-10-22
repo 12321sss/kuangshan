@@ -255,7 +255,10 @@ const moduleMenus: Record<string, MenuGroup[]> = {
     },
     {
       title: '结果比对',
-      items: [{ path: '/compare', title: '数据对比', perm: 'page:extract' }]
+      items: [
+        { path: '/compare', title: '数据对比', perm: 'page:extract' },
+        { path: '/fusion', title: '结果融合', perm: 'page:analysis' }
+      ]
     }
   ],
   iot: [

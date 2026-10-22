@@ -4,18 +4,44 @@
     <el-card shadow="never" class="op-card">
       <div class="op-bar">
         <div class="op-group">
-          <span class="lbl">分析区</span>
-          <el-select v-model="aoiId" size="small" placeholder="选择已导入的边界" style="width: 210px" @change="onAoiChange">
-            <el-option v-for="o in aoiOptions" :key="o.id" :label="`${o.name}（${o.areaHa} ha）`" :value="o.id" />
-          </el-select>
-          <el-date-picker v-model="range" type="daterange" size="small" value-format="YYYY-MM-DD"
-                          start-placeholder="起始" end-placeholder="结束" style="width: 230px" />
-          <span class="lbl">云量</span>
-          <el-input-number v-model="maxCloud" :min="1" :max="100" :step="5" size="small" style="width: 80px" />
-          <el-radio-group v-model="combo" size="small" @change="onComboChange">
-            <el-radio-button value="TRUE_COLOR">真彩</el-radio-button>
-            <el-radio-button value="FALSE_COLOR">假彩(近红外)</el-radio-button>
+          <el-radio-group v-model="source" size="small" @change="onSourceChange">
+            <el-radio-button value="LOCAL">本地高清影像</el-radio-button>
+            <el-radio-button value="SENTINEL2">在线 Sentinel-2</el-radio-button>
           </el-radio-group>
+
+          <template v-if="source === 'LOCAL'">
+            <span class="lbl">影像</span>
+            <el-select v-model="imageryId" size="small" placeholder="选择影像库里的上传影像"
+                       style="width: 240px" @change="onLocalImageryChange">
+              <el-option v-for="m in localImageries" :key="m.id"
+                         :label="`${m.name}（${m.acquisitionDate}）`" :value="m.id" />
+            </el-select>
+            <el-checkbox v-model="fullImage" label="整幅影像" border size="small" />
+            <template v-if="!fullImage">
+              <span class="lbl">兴趣区</span>
+              <el-select v-model="aoiId" size="small" placeholder="从边界加载" style="width: 200px"
+                         @change="refreshAoiOverlay">
+                <el-option v-for="o in aoiOptions" :key="o.id" :label="`${o.name}（${o.areaHa} ha）`" :value="o.id" />
+              </el-select>
+            </template>
+          </template>
+
+          <template v-else>
+            <span class="lbl">分析区</span>
+            <el-select v-model="aoiId" size="small" placeholder="选择已导入的边界" style="width: 210px" @change="onAoiChange">
+              <el-option v-for="o in aoiOptions" :key="o.id" :label="`${o.name}（${o.areaHa} ha）`" :value="o.id" />
+            </el-select>
+          </template>
+          <template v-if="source === 'SENTINEL2'">
+            <el-date-picker v-model="range" type="daterange" size="small" value-format="YYYY-MM-DD"
+                            start-placeholder="起始" end-placeholder="结束" style="width: 230px" />
+            <span class="lbl">云量</span>
+            <el-input-number v-model="maxCloud" :min="1" :max="100" :step="5" size="small" style="width: 80px" />
+            <el-radio-group v-model="combo" size="small" @change="onComboChange">
+              <el-radio-button value="TRUE_COLOR">真彩</el-radio-button>
+              <el-radio-button value="FALSE_COLOR">假彩(近红外)</el-radio-button>
+            </el-radio-group>
+          </template>
           <el-button size="small" :loading="loadingImg" @click="loadPreview">加载影像</el-button>
         </div>
       </div>
@@ -42,6 +68,11 @@
              @click="onClick">
           <div class="canvas-wrap" :style="wrapStyle">
             <img v-if="image" ref="imgRef" :src="'data:image/png;base64,' + image" class="view-img" @load="onImgLoad" />
+            <!-- 兴趣区描边：提示"分类范围"与"影像范围"不是一回事 -->
+            <svg v-if="image && aoiSvgPoints" class="aoi-svg" viewBox="0 0 100 100" preserveAspectRatio="none">
+              <polygon :points="aoiSvgPoints" fill="rgba(20,184,166,0.10)"
+                       stroke="#14b8a6" stroke-width="1.5" vector-effect="non-scaling-stroke" />
+            </svg>
             <div v-if="image" class="dots">
               <span v-for="(s, i) in samples" :key="i" class="dot"
                     :style="dotStyleOf(s)"
@@ -67,10 +98,24 @@
         <el-card shadow="never">
           <template #header>
             <div class="card-head">
-              <span>样本采集</span>
-              <el-button link type="danger" size="small" :disabled="!samples.length" @click="samples = []">清空</el-button>
+              <span>样本采集 <b class="cnt">{{ samples.length }}</b> 个 · <b class="cnt">{{ sampleClassCount }}</b> 类</span>
+              <div class="head-right">
+                <el-button link type="primary" size="small" @click="pickSampleFile">导入</el-button>
+                <el-dropdown size="small" trigger="click" @command="exportSamples">
+                  <el-button link type="primary" size="small">导出</el-button>
+                  <template #dropdown>
+                    <el-dropdown-menu>
+                      <el-dropdown-item command="csv">导出 CSV（Excel 可改）</el-dropdown-item>
+                      <el-dropdown-item command="geojson">导出 GeoJSON（GIS 可开）</el-dropdown-item>
+                    </el-dropdown-menu>
+                  </template>
+                </el-dropdown>
+                <el-button link type="danger" size="small" :disabled="!samples.length" @click="samples = []">清空</el-button>
+              </div>
             </div>
           </template>
+          <input ref="sampleInput" type="file" accept=".csv,.json,.geojson" class="hidden-input"
+                 @change="onSampleFile" />
           <div class="class-chips">
             <div v-for="c in classList" :key="c.value" class="chip"
                  :class="{ active: activeClass === c.value }"
@@ -160,21 +205,64 @@
             </el-table-column>
           </el-table>
 
-          <div class="sec-title">特征重要性</div>
-          <div v-for="f in topFeatures" :key="f.name" class="imp-row">
-            <span class="imp-name">{{ f.name }}</span>
-            <div class="imp-bar"><i :style="{ width: f.importance * 4 + '%' }"></i></div>
-            <span class="imp-val">{{ f.importance }}%</span>
-          </div>
-
-          <div class="sec-title">分类图</div>
-          <img v-if="result.imageBase64" :src="'data:image/png;base64,' + result.imageBase64" class="cls-img" />
+          <el-button class="map-btn" @click="resultDialog = true">查看分类专题图</el-button>
 
           <div v-for="(w, i) in result.warnings" :key="i" class="warn-tip">· {{ w }}</div>
           <div class="disclaimer">{{ result.disclaimer }}</div>
         </el-card>
       </div>
     </div>
+
+    <!-- 分类专题图：独立画布展示，右侧栏不再被拉长 -->
+    <el-dialog v-model="resultDialog" title="分类专题图" width="70%" top="6vh">
+      <div v-if="result" class="dlg-grid">
+        <div class="dlg-figure">
+          <img v-if="result.imageBase64" :src="'data:image/png;base64,' + result.imageBase64" class="dlg-img" />
+          <div class="dlg-legend">
+            <span v-for="c in result.classes" :key="c.classType" class="lg">
+              <i :style="{ background: c.color }"></i>{{ c.label }}
+            </span>
+          </div>
+        </div>
+        <div class="dlg-side">
+          <div class="sec-title">特征重要性</div>
+          <div v-for="f in topFeatures" :key="f.name" class="imp-row">
+            <span class="imp-name">{{ f.name }}</span>
+            <div class="imp-bar"><i :style="{ width: f.importance * 4 + '%' }"></i></div>
+            <span class="imp-val">{{ f.importance }}%</span>
+          </div>
+          <div class="sec-title">判别方法</div>
+          <div class="dlg-method">{{ result.method }}</div>
+          <div v-for="(w, i) in result.warnings" :key="i" class="warn-tip">· {{ w }}</div>
+          <div class="disclaimer">{{ result.disclaimer }}</div>
+        </div>
+      </div>
+    </el-dialog>
+
+    <!-- 样本导入校验报告：先给结论再让人决定合并还是替换 -->
+    <el-dialog v-model="importVisible" title="样本导入" width="520px">
+      <template v-if="importResult">
+        <div class="imp-line">
+          共读取 <b>{{ importResult.total }}</b> 行：有效 <b class="ok">{{ importResult.valid }}</b>，
+          重复像元 <b>{{ importResult.dup }}</b>，越界 <b>{{ importResult.out }}</b>，
+          未知类别 <b>{{ importResult.unknown }}</b>
+        </div>
+        <div class="imp-line">按类：{{ importResult.byClassText }}</div>
+        <el-alert v-if="importResult.shortText" type="warning" :closable="false" show-icon
+                  :title="importResult.shortText" class="imp-warn" />
+        <div v-if="importResult.errors?.length" class="imp-errs">
+          <div v-for="(e, i) in importResult.errors.slice(0, 6)" :key="i">· {{ e }}</div>
+          <div v-if="importResult.errors.length > 6">… 另有 {{ importResult.errors.length - 6 }} 条</div>
+        </div>
+      </template>
+      <template #footer>
+        <el-button size="small" @click="importVisible = false">取消</el-button>
+        <el-button size="small" :disabled="!importResult?.valid" @click="applyImport('replace')">替换现有</el-button>
+        <el-button size="small" type="primary" :disabled="!importResult?.valid" @click="applyImport('merge')">
+          合并导入
+        </el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -182,7 +270,7 @@
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { WarningFilled, InfoFilled } from '@element-plus/icons-vue'
-import { analysisApi, extractionApi } from '@/api'
+import { analysisApi, extractionApi, imageryApi } from '@/api'
 import type { AoiOption, ClassifySample, SupervisedResult } from '@/api'
 import { sentinelApi } from '@/api/sentinel'
 import { useProjectStore } from '@/stores/project'
@@ -199,6 +287,58 @@ const classList = [
   { value: 'VEGETATION', label: '植被', color: '#4caf50' },
   { value: 'WATER', label: '水体', color: '#2182d6' }
 ]
+
+/** 数据源：LOCAL 本地高清影像 / SENTINEL2 在线 */
+const source = ref<'LOCAL' | 'SENTINEL2'>('LOCAL')
+const localImageries = ref<Array<{ id: number; name: string; acquisitionDate: string; west: number; south: number; east: number; north: number }>>([])
+const imageryId = ref<number | null>(null)
+const fullImage = ref(true)
+const resultDialog = ref(false)
+
+// ---- 样本导入导出 ----
+const sampleInput = ref<HTMLInputElement>()
+const importVisible = ref(false)
+const importResult = ref<any>(null)
+const pendingImport = ref<ClassifySample[]>([])
+
+/** 兴趣区描边：把 AOI 外环换算成 0-100 的图像百分比坐标 */
+const aoiRing = computed<number[][]>(() => {
+  const opt = aoiOptions.value.find((o) => o.id === aoiId.value)
+  if (!opt) return []
+  // 去掉闭合重复点
+  const ring = opt.ring || []
+  return ring.length > 2 && ring[0][0] === ring[ring.length - 1][0] && ring[0][1] === ring[ring.length - 1][1]
+    ? ring.slice(0, -1) : ring
+})
+
+const aoiSvgPoints = computed(() => {
+  const b = bbox.value
+  const ring = aoiRing.value
+  if (!b || !ring.length) return ''
+  return ring
+    .map(([lng, lat]) => {
+      const x = ((lng - b.west) / (b.east - b.west)) * 100
+      const y = ((b.north - lat) / (b.north - b.south)) * 100
+      return `${x.toFixed(3)},${y.toFixed(3)}`
+    })
+    .join(' ')
+})
+
+const sampleClassCount = computed(() => new Set(samples.value.map((s) => s.classType)).size)
+
+function refreshAoiOverlay() {
+  // 触发 computed 重算即可（SFC 里显式调用一次便于读代码）
+  aoiSvgPoints.value
+}
+
+/** 当前应传给后端的 AOI：整幅模式传空，让后端按影像四至 */
+function effectiveAoi(): number[][] {
+  if (source.value === 'LOCAL') {
+    if (fullImage.value) return []
+    return aoiRing.value
+  }
+  return currentOption()?.ring || []
+}
 
 const aoiOptions = ref<AoiOption[]>([])
 const aoiId = ref<number | null>(null)
@@ -236,6 +376,11 @@ const wrapStyle = computed(() => ({
 const canRun = computed(() => {
   const codes = new Set(samples.value.map((s) => s.classType))
   return codes.size >= 2 && samples.value.length >= 16
+})
+
+/** 选影像后自动取预览，省一次点击 */
+watch([imageryId, source], () => {
+  if (source.value === 'LOCAL' && imageryId.value) loadLocalPreview()
 })
 
 const topFeatures = computed(() => (result.value?.featureImportance || []).slice(0, 8))
@@ -280,9 +425,29 @@ function dotStyleOf(s: ClassifySample) {
   }
 }
 
+async function loadLocalImageries() {
+  const pid = projectStore.currentId
+  if (!pid) return
+  try {
+    const rows = await imageryApi.list({ projectId: pid })
+    localImageries.value = rows
+      .filter((r) => r.source === 'UPLOAD' && r.filePath)
+      .map((r) => ({
+        id: r.id, name: r.name, acquisitionDate: r.acquisitionDate,
+        west: r.west, south: r.south, east: r.east, north: r.north
+      }))
+    if (localImageries.value.length && !imageryId.value) {
+      imageryId.value = localImageries.value[0].id
+    }
+  } catch {
+    localImageries.value = []
+  }
+}
+
 async function loadOptions() {
   const pid = projectStore.currentId
   if (!pid) return
+  loadLocalImageries()
   try {
     const res = await analysisApi.aoiOptions(pid)
     aoiOptions.value = res.options || []
@@ -300,6 +465,51 @@ function currentOption() {
   return aoiOptions.value.find((o) => o.id === aoiId.value) || null
 }
 
+function onSourceChange() {
+  image.value = ''
+  samples.value = []
+  result.value = null
+  bbox.value = null
+}
+
+function currentImagery() {
+  return localImageries.value.find((m) => m.id === imageryId.value) || null
+}
+
+/** 本地影像：从后端取预览图并按影像四至定位 */
+async function loadLocalPreview() {
+  const img = currentImagery()
+  if (!img) {
+    ElMessage.warning('请先选择影像')
+    return
+  }
+  loadingImg.value = true
+  try {
+    const res = await imageryApi.preview(img.id)
+    if (res.error || !res.previewBase64) {
+      ElMessage.error(res.error || '预览图生成失败')
+      return
+    }
+    image.value = res.previewBase64
+    bbox.value = {
+      west: img.west, south: img.south, east: img.east, north: img.north
+    }
+    scale.value = 1
+    offset.value = { x: 0, y: 0 }
+  } catch (e: any) {
+    ElMessage.error(e?.message || '预览加载失败')
+  } finally {
+    loadingImg.value = false
+  }
+}
+
+function onLocalImageryChange() {
+  image.value = ''
+  result.value = null
+  bbox.value = null
+  loadLocalPreview()
+}
+
 function onAoiChange() {
   image.value = ''
   samples.value = []
@@ -308,6 +518,10 @@ function onAoiChange() {
 }
 
 async function loadPreview() {
+  if (source.value === 'LOCAL') {
+    await loadLocalPreview()
+    return
+  }
   const opt = currentOption()
   if (!opt) {
     ElMessage.warning('请先选择分析区')
@@ -440,6 +654,10 @@ function onClick(e: MouseEvent) {
 }
 
 async function runClassify() {
+  if (source.value === 'LOCAL') {
+    await runClassifyLocal()
+    return
+  }
   const opt = currentOption()
   if (!opt) return
   classifying.value = true
@@ -461,6 +679,263 @@ async function runClassify() {
   } finally {
     classifying.value = false
   }
+}
+
+async function runClassifyLocal() {
+  const img = currentImagery()
+  if (!img) {
+    ElMessage.warning('请先选择影像')
+    return
+  }
+  classifying.value = true
+  result.value = null
+  try {
+    const res = await analysisApi.classifyLocal({
+      projectId: projectStore.currentId!,
+      imageryId: img.id,
+      // 整幅模式不传 AOI（后端按影像四至）；否则用当前兴趣区
+      aoi: effectiveAoi(),
+      samples: samples.value,
+      minSamples: 8
+    })
+    result.value = res
+    ElMessage.success(`分类完成：OA ${res.accuracy?.overallAccuracy}% · Kappa ${res.accuracy?.kappa}`)
+  } catch (e: any) {
+    ElMessage.error(e?.message || '本地影像分类失败')
+  } finally {
+    classifying.value = false
+  }
+}
+
+// ------------------------------------------------------------------
+// 样本导入导出（纯前端，不经过服务器：样本是临时分析产物）
+// ------------------------------------------------------------------
+
+const CLASS_ALIAS: Record<string, string> = {
+  采坑: 'PIT', 露天采坑: 'PIT', 排土场: 'DUMP', 废石堆: 'DUMP',
+  尾矿: 'TAILINGS', 尾矿设施: 'TAILINGS', 裸地: 'BARE', 扰动区: 'BARE',
+  道路: 'ROAD', 植被: 'VEGETATION', 水体: 'WATER'
+}
+const VALID_CLASSES = ['PIT', 'DUMP', 'TAILINGS', 'BARE', 'ROAD', 'VEGETATION', 'WATER']
+
+function normalizeClass(raw: string): string | null {
+  const t = String(raw || '').trim()
+  if (!t) return null
+  const upper = t.toUpperCase()
+  if (VALID_CLASSES.includes(upper)) return upper
+  return CLASS_ALIAS[t] || null
+}
+
+function pickSampleFile() {
+  sampleInput.value?.click()
+}
+
+function onSampleFile(e: Event) {
+  const input = e.target as HTMLInputElement
+  const file = input.files?.[0]
+  if (!file) return
+  const reader = new FileReader()
+  reader.onload = () => {
+    try {
+      const text = String(reader.result || '')
+      const parsed = file.name.toLowerCase().endsWith('.csv')
+        ? parseSampleCsv(text)
+        : parseSampleGeoJson(text)
+      importResult.value = parsed
+      pendingImport.value = parsed.points
+      importVisible.value = true
+    } catch (err: any) {
+      ElMessage.error(err?.message || '文件解析失败')
+    } finally {
+      input.value = ''
+    }
+  }
+  reader.readAsText(file, 'utf-8')
+}
+
+/** CSV：表头容错（class/type/类型，lng/lon/x/经度，lat/y/纬度），# 开头为注释 */
+function parseSampleCsv(text: string) {
+  const lines = text.split(/\r?\n/).filter((l) => l.trim() && !l.trim().startsWith('#'))
+  if (!lines.length) throw new Error('文件为空或只有注释行')
+  const header = lines[0].split(',').map((h) => h.trim().toLowerCase())
+  const find = (...keys: string[]) => header.findIndex((h) => keys.includes(h))
+  const iCls = find('classtype', 'class', 'type', '类型', '类别')
+  const iLng = find('lng', 'lon', 'x', '经度')
+  const iLat = find('lat', 'y', '纬度')
+  if (iCls < 0 || iLng < 0 || iLat < 0) {
+    throw new Error('表头缺少必要列：需要 classType、lng、lat（或中文「类型/经度/纬度」）')
+  }
+
+  const points: ClassifySample[] = []
+  const errors: string[] = []
+  let dup = 0
+  let out = 0
+  let unknown = 0
+  const seen = new Set<string>()
+  const b = bbox.value
+
+  for (let n = 1; n < lines.length; n++) {
+    const cols = lines[n].split(',')
+    const cls = normalizeClass(cols[iCls] || '')
+    const lng = Number(cols[iLng])
+    const lat = Number(cols[iLat])
+    if (!cls) {
+      unknown++
+      errors.push(`第 ${n + 1} 行：类别「${(cols[iCls] || '').trim()}」无法识别`)
+      continue
+    }
+    if (!isFinite(lng) || !isFinite(lat)) {
+      unknown++
+      errors.push(`第 ${n + 1} 行：经纬度不是数字`)
+      continue
+    }
+    if (Math.abs(lng) > 180 || Math.abs(lat) > 90) {
+      out++
+      errors.push(`第 ${n + 1} 行：${lng},${lat} 不像经纬度（可能是投影坐标，请先转 WGS84）`)
+      continue
+    }
+    if (b && (lng < b.west || lng > b.east || lat < b.south || lat > b.north)) {
+      out++
+      errors.push(`第 ${n + 1} 行：落在影像范围外`)
+      continue
+    }
+    const key = `${lng.toFixed(6)},${lat.toFixed(6)}`
+    if (seen.has(key)) {
+      dup++
+      continue
+    }
+    seen.add(key)
+    points.push({ classType: cls, lng: +lng.toFixed(7), lat: +lat.toFixed(7) })
+  }
+
+  return summarizeImport(lines.length - 1, points, { dup, out, unknown, errors })
+}
+
+/** GeoJSON：取 Point 要素，属性里认 classType/class/type */
+function parseSampleGeoJson(text: string) {
+  const obj = JSON.parse(text)
+  const feats: any[] = obj.type === 'FeatureCollection' ? obj.features || [] : [obj]
+  const points: ClassifySample[] = []
+  const errors: string[] = []
+  let unknown = 0
+  let out = 0
+  let dup = 0
+  const seen = new Set<string>()
+  const b = bbox.value
+
+  feats.forEach((f, i) => {
+    const geom = f.geometry || f
+    if (geom?.type !== 'Point') return
+    const [lng, lat] = geom.coordinates || []
+    const props = f.properties || {}
+    const cls = normalizeClass(props.classType || props.class || props.type || '')
+    if (!cls) {
+      unknown++
+      errors.push(`第 ${i + 1} 个要素：缺少类别属性`)
+      return
+    }
+    if (Math.abs(lng) > 180 || Math.abs(lat) > 90) {
+      out++
+      errors.push(`第 ${i + 1} 个要素：坐标不像经纬度`)
+      return
+    }
+    if (b && (lng < b.west || lng > b.east || lat < b.south || lat > b.north)) {
+      out++
+      errors.push(`第 ${i + 1} 个要素：落在影像范围外`)
+      return
+    }
+    const key = `${lng.toFixed(6)},${lat.toFixed(6)}`
+    if (seen.has(key)) {
+      dup++
+      return
+    }
+    seen.add(key)
+    points.push({ classType: cls, lng, lat })
+  })
+
+  return summarizeImport(feats.length, points, { dup, out, unknown, errors })
+}
+
+function summarizeImport(total: number, points: ClassifySample[], extra: {
+  dup: number; out: number; unknown: number; errors: string[]
+}) {
+  const counts: Record<string, number> = {}
+  for (const p of points) counts[p.classType] = (counts[p.classType] || 0) + 1
+  const byClassText = Object.keys(counts).length
+    ? Object.entries(counts).map(([k, v]) => `${classLabel(k)} ${v}`).join('、')
+    : '无有效点'
+  const short = Object.entries(counts).filter(([, v]) => v < 8)
+  return {
+    total,
+    valid: points.length,
+    dup: extra.dup,
+    out: extra.out,
+    unknown: extra.unknown,
+    errors: extra.errors,
+    byClassText,
+    shortText: short.length
+      ? `样本量偏少：${short.map(([k, v]) => `${classLabel(k)} ${v}`).join('、')}（每类建议 ≥8）`
+      : '',
+    points
+  }
+}
+
+function applyImport(mode: 'merge' | 'replace') {
+  const incoming = pendingImport.value || []
+  if (mode === 'replace') {
+    samples.value = incoming.slice()
+  } else {
+    const seen = new Set(samples.value.map((s) => `${s.lng},${s.lat}`))
+    const add = incoming.filter((p) => !seen.has(`${p.lng},${p.lat}`))
+    samples.value = [...samples.value, ...add]
+  }
+  importVisible.value = false
+  ElMessage.success(`已${mode === 'replace' ? '替换' : '合并'}导入，当前共 ${samples.value.length} 个样本`)
+}
+
+function exportSamples(kind: 'csv' | 'geojson') {
+  if (!samples.value.length) {
+    ElMessage.warning('还没有样本可导出')
+    return
+  }
+  const img = currentImagery()
+  const ring = aoiRing.value
+  const stamp = new Date().toISOString().slice(0, 10).replace(/-/g, '')
+  const base = `样本_${img?.name?.replace(/\.[^.]+$/, '') || '区域'}_${stamp}`
+
+  if (kind === 'csv') {
+    const head = [
+      '# schema=v1',
+      `# imagery=${img?.name || ''}`,
+      ring.length ? `# aoi=${ring.map((p) => p.join(',')).join(';')}` : '# aoi=整幅影像',
+      `# exported=${new Date().toISOString()}`,
+      'classType,lng,lat,note'
+    ].join('\n')
+    const body = samples.value.map((s) => `${s.classType},${s.lng},${s.lat},`).join('\n')
+    // BOM 让 Excel 直接打开不乱码
+    download(`${base}.csv`, '\ufeff' + head + '\n' + body, 'text/csv;charset=utf-8')
+  } else {
+    const fc = {
+      type: 'FeatureCollection',
+      features: samples.value.map((s, i) => ({
+        type: 'Feature',
+        properties: { classType: s.classType, index: i + 1 },
+        geometry: { type: 'Point', coordinates: [s.lng, s.lat] }
+      }))
+    }
+    download(`${base}.geojson`, JSON.stringify(fc, null, 2), 'application/geo+json')
+  }
+  ElMessage.success(`已导出 ${samples.value.length} 个样本`)
+}
+
+function download(name: string, content: string, mime: string) {
+  const blob = new Blob([content], { type: mime })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = name
+  a.click()
+  URL.revokeObjectURL(url)
 }
 
 /** 各类分别落一条解译记录，走既有的时序/风险/报告链路 */
@@ -485,7 +960,20 @@ async function saveAll() {
         coveragePct: c.pctOfAoi,
         aoiAreaHa: areaHa,
         acquisitionDate: (res.scene?.datetime || range.value[1]).slice(0, 10),
-        satellite: 'SENTINEL2'
+        satellite: source.value === 'LOCAL'
+          ? (currentImagery()?.name?.includes('GF7') ? 'GF7' : 'GF2')
+          : 'SENTINEL2',
+        // 标记解译方法：叠加分析要按方法区分"分类结果"与"指数结果"
+        method: 'SUPERVISED',
+        accuracyJson: JSON.stringify({
+          overallAccuracy: res.accuracy?.overallAccuracy,
+          kappa: res.accuracy?.kappa,
+          oobScore: res.accuracy?.oobScore,
+          split: res.accuracy?.split,
+          sampleCount: res.accuracy?.sampleCount,
+          confusionMatrix: res.accuracy?.confusionMatrix,
+          labels: res.accuracy?.labels
+        })
       })
       saved++
     }
@@ -586,6 +1074,21 @@ watch(() => projectStore.currentId, () => {
 .imp-bar i { display: block; height: 100%; background: #0d9488; }
 .imp-val { width: 38px; text-align: right; font-size: 11px; color: #374151; }
 .cls-img { width: 100%; border: 1px solid #eef0f3; border-radius: 6px; image-rendering: pixelated; }
+.map-btn { width: 100%; margin-top: 10px; }
+.cnt { color: #0d9488; }
+.hidden-input { display: none; }
+.aoi-svg { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+.imp-line { font-size: 12px; color: #374151; line-height: 1.9; }
+.imp-line .ok { color: #2e7d32; }
+.imp-warn { margin-top: 8px; border-radius: 6px; }
+.imp-errs { margin-top: 8px; font-size: 11px; color: #b45309; line-height: 1.7; max-height: 120px; overflow-y: auto; }
+.dlg-grid { display: grid; grid-template-columns: 1fr 240px; gap: 14px; align-items: start; }
+.dlg-figure { min-width: 0; }
+.dlg-img { width: 100%; max-height: 68vh; object-fit: contain; image-rendering: pixelated; }
+.dlg-legend { display: flex; flex-wrap: wrap; gap: 6px 14px; margin-top: 8px; }
+.lg { display: flex; align-items: center; gap: 5px; font-size: 12px; color: #4b5563; }
+.lg i { width: 12px; height: 12px; border-radius: 2px; display: inline-block; }
+.dlg-method { font-size: 11px; color: #6b7280; line-height: 1.6; margin-bottom: 6px; }
 .warn-tip { font-size: 11px; color: #b45309; line-height: 1.6; margin-top: 4px; }
 .disclaimer { font-size: 10px; color: #a9aeb8; line-height: 1.6; margin-top: 8px; }
 </style>

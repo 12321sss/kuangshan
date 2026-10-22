@@ -60,6 +60,12 @@
               影像库为空，请先到「影像库」页上传高分影像或登记 Sentinel-2 场景
             </div>
           </el-form-item>
+          <el-form-item label="提取范围">
+            <el-switch v-model="fullImage" active-text="整幅影像" inactive-text="手绘 AOI" />
+            <div class="form-note">
+              整幅影像：直接用影像覆盖范围提取，不用画 AOI；手绘则按圈选范围提取
+            </div>
+          </el-form-item>
           <el-form-item v-if="selectedImagery?.source === 'UPLOAD'" label="影像数据源">
             <el-select v-model="form.satellite" style="width: 100%">
               <el-option value="GF2" label="高分二号（GF-2，四波段）" />
@@ -329,6 +335,42 @@ function activeAoi(): number[][] {
   return aoiFloat ? [...aoi.value, aoiFloat] : aoi.value
 }
 
+/** 整幅影像模式：AOI 直接取影像覆盖范围，省掉手画 */
+const fullImage = ref(false)
+
+function imageRing(): number[][] {
+  const img = selectedImagery.value
+  if (!img) return []
+  return [
+    [img.west, img.south],
+    [img.east, img.south],
+    [img.east, img.north],
+    [img.west, img.north]
+  ]
+}
+
+/** 打开整幅模式或切换影像时，把 AOI 同步成影像范围并画到地图上 */
+watch([fullImage, selectedImagery], () => {
+  const img = selectedImagery.value
+  // 选了影像就先把视角飞过去，用户才看得到影像在哪
+  if (img && viewer) {
+    const span = Math.max(img.east - img.west, img.north - img.south)
+    viewer.camera.flyTo({
+      destination: Cartesian3.fromDegrees(
+        (img.west + img.east) / 2, (img.south + img.north) / 2,
+        Math.max(1200, span * 111000 * 1.8)
+      ),
+      orientation: { heading: 0, pitch: -Math.PI / 3 },
+      duration: 1.0
+    })
+  }
+  if (!fullImage.value) return
+  const ring = imageRing()
+  if (ring.length < 3) return
+  aoi.value = ring
+  refreshAoiShape()
+})
+
 // ---- 从边界加载 AOI ----
 const boundaryOptions = ref<Array<{ id: number; name: string; areaHa: number }>>([])
 const boundaryPick = ref<number | null>(null)
@@ -355,7 +397,7 @@ const saveBoundaryType = ref<'PERMIT' | 'DISTURBANCE' | 'ECO'>('PERMIT')
 const savingBoundary = ref(false)
 
 function openSaveBoundary() {
-  if (aoi.value.length < 3) {
+  if (aoi.value.length < 3 && !fullImage.value) {
     ElMessage.warning('请先圈选 AOI 或从边界加载一个范围')
     return
   }
@@ -783,7 +825,10 @@ onBeforeUnmount(() => {
 .side { display: flex; flex-direction: column; gap: 12px; min-height: 0; overflow-y: auto; }
 
 .side-card { border: 1px solid #eceef2; border-radius: 10px; flex-shrink: 0; }
-.records-card { flex: 1; min-height: 120px; }
+.records-card { flex: 1 1 280px; min-height: 240px; }
+/* 记录卡给足高度并内部滚动：之前被上下两张卡挤成一条，字都看不清 */
+.records-card :deep(.el-card__body) { max-height: 360px; overflow-y: auto; }
+.record-item { padding: 8px 10px; border-radius: 8px; }
 
 .side-title { font-size: 14px; font-weight: 600; }
 .records-head { display: flex; align-items: center; justify-content: space-between; }

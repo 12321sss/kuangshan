@@ -72,6 +72,27 @@ export const stationApi = {
   remove: (id: string): Promise<void> => http.delete(`/stations/${id}`)
 }
 
+export const fusionApi = {
+  /** 差异分析：两套结果的一致性（IoU/一致面积/仅分类/仅指数/待核查斑块） */
+  compare: (body: {
+    projectId: number
+    classifiedIds: number[]
+    indexIds: number[]
+    pairs?: Array<{ classType: string; strategy: string }>
+    options?: { minPatchHa?: number; topPatches?: number; withImage?: boolean }
+    withImage?: boolean
+  }): Promise<any> => http.post('/analysis/fusion/compare', body, { timeout: 120000 }),
+
+  /** 融合：按类策略生成最终结果（不落库） */
+  merge: (body: {
+    projectId: number
+    classifiedIds: number[]
+    indexIds: number[]
+    pairs: Array<{ classType: string; strategy: string }>
+    withImage?: boolean
+  }): Promise<any> => http.post('/analysis/fusion/merge', body, { timeout: 120000 })
+}
+
 export const analysisApi = {
   /** 可选分析区（来自「边界管理」导入的边界，含外环） */
   aoiOptions: (projectId: number): Promise<{ options: AoiOption[]; permitAreaNote?: string }> =>
@@ -89,6 +110,28 @@ export const analysisApi = {
     minSamples?: number
   }): Promise<SupervisedResult> =>
     http.post('/analysis/classify-supervised', body, { timeout: 420000 }),
+
+  /** 本地高清影像监督分类（4 波段，0.5m 级） */
+  classifyLocal: (body: {
+    projectId: number
+    imageryId: number
+    aoi?: number[][]
+    samples: ClassifySample[]
+    maxDim?: number
+    minSamples?: number
+  }): Promise<SupervisedResult> =>
+    http.post('/analysis/classify-local', body, { timeout: 300000 }),
+
+  /** 本地高清影像监督分类（4 波段，0.5m 级） */
+  classifyLocal: (body: {
+    projectId: number
+    imageryId: number
+    aoi?: number[][]
+    samples: ClassifySample[]
+    maxDim?: number
+    minSamples?: number
+  }): Promise<SupervisedResult> =>
+    http.post('/analysis/classify-local', body, { timeout: 300000 }),
 
   /** L1：最近 N 天影像可用性 */
   monitorAvailability: (body: {
@@ -243,7 +286,8 @@ export const roleApi = {
 }
 
 export const extractionApi = {
-  list: (projectId?: number): Promise<Extraction[]> => http.get('/extractions', { params: { projectId } }),
+  list: (projectId?: number, method?: string): Promise<Extraction[]> =>
+    http.get('/extractions', { params: { projectId, method } }),
   get: (id: number): Promise<Extraction> => http.get(`/extractions/${id}`),
   /** 提交真实解译任务（选影像 + 圈 AOI + 选类别），返回 inference taskId */
   submit: (req: {
@@ -278,6 +322,9 @@ export const extractionApi = {
     aoiAreaHa: number
     acquisitionDate?: string
     satellite?: string
+    /** INDEX（默认）/ SUPERVISED / FUSION */
+    method?: string
+    accuracyJson?: string
   }): Promise<Extraction> => http.post('/extractions/save', req),
   /** 删除到回收站（软删除，可还原） */
   remove: (id: number): Promise<void> => http.delete(`/extractions/${id}`),
@@ -302,6 +349,47 @@ export const imageryApi = {
   get: (id: number): Promise<Imagery> => http.get(`/imagery/${id}`),
   /** 可选坐标系列表（上传时选择） */
   crsOptions: (): Promise<CrsOption[]> => http.get('/imagery/crs-options'),
+  /** 已入库影像的预览图（贴地图用） */
+  preview: (id: number): Promise<{
+    previewBase64?: string | null
+    bounds?: { west: number; south: number; east: number; north: number }
+    error?: string
+  }> => http.get(`/imagery/${id}/preview`, { timeout: 120000 }),
+
+  /** 已入库影像的预览图（贴地图用） */
+  preview: (id: number): Promise<{
+    previewBase64?: string | null
+    bounds?: { west: number; south: number; east: number; north: number }
+    error?: string
+  }> => http.get(`/imagery/${id}/preview`, { timeout: 120000 }),
+
+  /** 自动识别影像自带的坐标系/范围/分辨率/日期（GeoTIFF 读取） */
+  probe: (file: File): Promise<{
+    crs?: string | null
+    epsg?: number | null
+    bounds?: { west: number; south: number; east: number; north: number } | null
+    width?: number
+    height?: number
+    bandCount?: number
+    resolutionM?: number | null
+    acquisitionDate?: string | null
+    dateSource?: string
+    satellite?: string | null
+    satelliteSource?: string
+    areaKm2?: number | null
+    storedPath?: string
+    originalName?: string
+    sizeBytes?: number
+    warnings?: string[]
+    error?: string
+  }> => {
+    const fd = new FormData()
+    fd.append('file', file)
+    return http.post('/imagery/probe', fd, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+      timeout: 180000
+    })
+  },
   /** 更新影像档案元数据（离轴角/正射等级/授权范围/供应商等 12 项） */
   updateMetadata: (id: number, meta: Record<string, any>): Promise<Imagery> =>
     http.put(`/imagery/${id}/metadata`, meta),
@@ -321,24 +409,28 @@ export const imageryApi = {
     file: File
     projectId?: number
     name?: string
-    crs: string
-    acquisitionDate: string
+    /** 下面四项可留空：不传则由后端按影像自带的 CRS/范围/分辨率/日期自动识别 */
+    crs?: string
+    acquisitionDate?: string
     resolutionM?: number
-    bounds: number[]
+    bounds?: number[]
+    /** probe 阶段已存的临时文件，避免同一份大影像传两次 */
+    existingPath?: string
   }): Promise<Imagery> => {
     const fd = new FormData()
     fd.append('file', req.file)
     if (req.projectId !== undefined) fd.append('projectId', String(req.projectId))
     if (req.name) fd.append('name', req.name)
-    fd.append('crs', req.crs)
-    fd.append('acquisitionDate', req.acquisitionDate)
+    if (req.crs) fd.append('crs', req.crs)
+    if (req.acquisitionDate) fd.append('acquisitionDate', req.acquisitionDate)
     if (req.resolutionM !== undefined) fd.append('resolutionM', String(req.resolutionM))
+    if (req.existingPath) fd.append('existingPath', req.existingPath)
     // bounds 重复参数：Spring 的 List<Double> 接多值
-    req.bounds.forEach((b) => fd.append('bounds', String(b)))
+    if (req.bounds && req.bounds.length === 4) req.bounds.forEach((b) => fd.append('bounds', String(b)))
     // 去掉默认的 JSON Content-Type，让浏览器自己带 multipart boundary
     return http.post('/imagery/upload', fd, {
       headers: { 'Content-Type': 'multipart/form-data' },
-      timeout: 120000
+      timeout: 600000
     })
   },
   /** 登记一景公开数据到影像库 */
