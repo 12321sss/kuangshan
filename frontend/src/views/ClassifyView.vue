@@ -44,7 +44,7 @@
             <img v-if="image" ref="imgRef" :src="'data:image/png;base64,' + image" class="view-img" @load="onImgLoad" />
             <div v-if="image" class="dots">
               <span v-for="(s, i) in samples" :key="i" class="dot"
-                    :style="{ left: dotStyle(s).left, top: dotStyle(s).top, background: classColor(s.classType) }"
+                    :style="dotStyleOf(s)"
                     :title="`${classLabel(s.classType)} #${i + 1}`"></span>
             </div>
           </div>
@@ -251,12 +251,33 @@ function countOf(code: string) {
 }
 
 /** 像元采样点 → 图上百分比位置（bbox 线性映射，与后端 clip 的窗口一致） */
-function dotStyle(s: ClassifySample) {
+/**
+ * 样本点大小：**屏幕尺寸恒定**，不随影像缩放变化
+ *
+ * 之前点画在缩放容器里，容器放大 4 倍点就跟着放大 4 倍，小影像上直接把图盖满。
+ * 这里用反向缩放（1/scale）抵消容器缩放，同时按影像边长自适应基准大小：
+ * 小影像（几十像素）用 3px 点，大影像最多 10px。
+ */
+const dotBasePx = computed(() => {
+  const n = Math.min(imgNatural.value.w || 0, imgNatural.value.h || 0)
+  if (!n) return 7
+  return Math.min(10, Math.max(4, n * 0.05))
+})
+const dotCounterScale = computed(() => Math.min(2.5, Math.max(0.2, 1 / scale.value)))
+
+function dotStyleOf(s: ClassifySample) {
   const b = bbox.value
-  if (!b) return { left: '0%', top: '0%' }
+  const base = { width: `${dotBasePx.value}px`, height: `${dotBasePx.value}px`, background: classColor(s.classType) }
+  if (!b) return { ...base, left: '0%', top: '0%' }
   const x = ((s.lng - b.west) / (b.east - b.west)) * 100
   const y = ((b.north - s.lat) / (b.north - b.south)) * 100
-  return { left: `${x}%`, top: `${y}%` }
+  return {
+    ...base,
+    left: `${x}%`,
+    top: `${y}%`,
+    // 抵消画布缩放，保证屏幕上看到的大小恒定
+    transform: `translate(-50%, -50%) scale(${dotCounterScale.value})`
+  }
 }
 
 async function loadOptions() {
@@ -508,8 +529,9 @@ watch(() => projectStore.currentId, () => {
 .view-img { display: block; max-width: none; user-select: none; -webkit-user-drag: none; image-rendering: pixelated; }
 .dots { position: absolute; inset: 0; pointer-events: none; }
 .dot {
-  position: absolute; width: 9px; height: 9px; border-radius: 50%;
-  transform: translate(-50%, -50%); box-shadow: 0 0 0 1.5px #fff;
+  position: absolute; border-radius: 50%;
+  /* 宽高与 transform 由 dotStyleOf 动态给定（屏幕尺寸恒定） */
+  box-shadow: 0 0 0 1px #fff;
 }
 .viewer-empty {
   position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
