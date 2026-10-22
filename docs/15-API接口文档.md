@@ -170,6 +170,9 @@ POST /api/analysis/spatial-relations?projectId=1&bufferKm=2&slopeCutDeg=15
 | POST | `/api/analysis/classify-supervised` | 监督分类（随机森林 + 混淆矩阵） |
 | POST | `/api/analysis/monitor-availability` | L1 影像可用性检查 |
 | POST | `/api/analysis/change-events` | L2 两期突变检测 |
+| POST | `/api/analysis/fusion/compare` | **新增**：分类结果 × 指数结果一致性（IoU/差异斑块） |
+| POST | `/api/analysis/fusion/merge` | **新增**：按类策略融合（指数优先/仅一致/指数补充） |
+| GET | `/api/extractions?method=SUPERVISED` | 按解译方法过滤（INDEX / SUPERVISED / FUSION） |
 
 ```json
 POST /api/analysis/classify-supervised
