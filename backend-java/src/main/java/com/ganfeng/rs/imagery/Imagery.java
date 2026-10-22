@@ -97,6 +97,54 @@ public class Imagery {
     @Column(length = 512)
     private String note;
 
+    // ------------------------------------------------------------------
+    // 影像档案元数据（方案附录 B 要求 24 字段，这里补最关键的 12 项）
+    // 这些字段是客户问"你们影像合规吗、能不能用于训练"时要翻的表，
+    // 缺了它就只能口头解释，交付成果 B 也无从谈起。
+    // ------------------------------------------------------------------
+
+    /** 离轴角（度）：越大侧视越强，正射精度与阴影越长越差 */
+    private Double offNadirAngle;
+
+    /** 太阳高度角（度）：过低会拉长阴影，影响分类与变化检测 */
+    private Double sunElevation;
+
+    /** 太阳方位角（度） */
+    private Double sunAzimuth;
+
+    /** 正射等级：RAW 原始 / L1T 粗校正 / L2A 大气校正 / ORTHO 正射 / OTHER */
+    @Column(length = 16)
+    private String orthoLevel;
+
+    /** 授权范围：INTERNAL 内部 / TRAIN 训练 / PUBLISH 发表 / CROSS_BORDER 跨境 */
+    @Column(length = 24)
+    private String licenseScope;
+
+    /** 供应商（影像来源方，合规追溯用） */
+    @Column(length = 128)
+    private String vendor;
+
+    /** 采购单价（元） */
+    private Double price;
+
+    /** 币种，默认 CNY */
+    @Column(length = 8)
+    private String priceCurrency;
+
+    /** 采购单号 / 合同号 */
+    @Column(length = 64)
+    private String orderNo;
+
+    /** 交付日期 */
+    private LocalDate deliveryDate;
+
+    /** 波段数 */
+    private Integer bandCount;
+
+    /** 传感器型号（如 MSI / PMS / WFV） */
+    @Column(length = 32)
+    private String sensorName;
+
     @Column(nullable = false)
     private LocalDateTime createdAt = LocalDateTime.now();
 
@@ -142,4 +190,30 @@ public class Imagery {
     public void setFavorite(Boolean v) { this.favorite = v; }
     public void setNote(String v) { this.note = v; }
     public void setCreatedAt(LocalDateTime v) { this.createdAt = v; }
+
+    // ---- 档案元数据 ----
+    public Double getOffNadirAngle() { return offNadirAngle; }
+    public void setOffNadirAngle(Double v) { this.offNadirAngle = v; }
+    public Double getSunElevation() { return sunElevation; }
+    public void setSunElevation(Double v) { this.sunElevation = v; }
+    public Double getSunAzimuth() { return sunAzimuth; }
+    public void setSunAzimuth(Double v) { this.sunAzimuth = v; }
+    public String getOrthoLevel() { return orthoLevel; }
+    public void setOrthoLevel(String v) { this.orthoLevel = v; }
+    public String getLicenseScope() { return licenseScope; }
+    public void setLicenseScope(String v) { this.licenseScope = v; }
+    public String getVendor() { return vendor; }
+    public void setVendor(String v) { this.vendor = v; }
+    public Double getPrice() { return price; }
+    public void setPrice(Double v) { this.price = v; }
+    public String getPriceCurrency() { return priceCurrency; }
+    public void setPriceCurrency(String v) { this.priceCurrency = v; }
+    public String getOrderNo() { return orderNo; }
+    public void setOrderNo(String v) { this.orderNo = v; }
+    public LocalDate getDeliveryDate() { return deliveryDate; }
+    public void setDeliveryDate(LocalDate v) { this.deliveryDate = v; }
+    public Integer getBandCount() { return bandCount; }
+    public void setBandCount(Integer v) { this.bandCount = v; }
+    public String getSensorName() { return sensorName; }
+    public void setSensorName(String v) { this.sensorName = v; }
 }

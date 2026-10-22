@@ -238,8 +238,9 @@
             </template>
           </el-table-column>
           <el-table-column prop="acquisitionDate" label="日期" width="104" />
-          <el-table-column v-if="canManage" label="操作" width="70" fixed="right">
+          <el-table-column v-if="canManage" label="操作" width="120" fixed="right">
             <template #default="{ row }">
+              <el-button link type="primary" size="small" @click="openMeta(row)">元数据</el-button>
               <el-button link type="danger" size="small" @click="removeImagery(row)">删除</el-button>
             </template>
           </el-table-column>
@@ -252,6 +253,77 @@
         </el-alert>
       </el-card>
     </div>
+
+    <!-- 影像档案元数据：方案附录 B 要求的字段，客户问"合规吗、能训练吗"要靠这张表 -->
+    <el-dialog v-model="metaVisible" title="影像档案元数据" width="720px">
+      <div v-if="metaRow" class="meta-head">
+        当前影像：<b>{{ metaRow.name }}</b>
+        <span class="meta-sub">{{ metaRow.acquisitionDate }} · {{ metaRow.source }}</span>
+      </div>
+      <el-form :model="metaForm" label-width="112px" size="small" class="meta-form">
+        <div class="meta-grid">
+          <el-form-item label="离轴角(°)">
+            <el-input-number v-model="metaForm.offNadirAngle" :min="0" :max="65" :step="0.5" controls-position="right" style="width: 100%" />
+          </el-form-item>
+          <el-form-item label="太阳高度角(°)">
+            <el-input-number v-model="metaForm.sunElevation" :min="0" :max="90" :step="1" controls-position="right" style="width: 100%" />
+          </el-form-item>
+          <el-form-item label="太阳方位角(°)">
+            <el-input-number v-model="metaForm.sunAzimuth" :min="0" :max="360" :step="1" controls-position="right" style="width: 100%" />
+          </el-form-item>
+          <el-form-item label="正射等级">
+            <el-select v-model="metaForm.orthoLevel" clearable placeholder="选择" style="width: 100%">
+              <el-option label="RAW 原始" value="RAW" />
+              <el-option label="L1T 粗校正" value="L1T" />
+              <el-option label="L2A 大气校正" value="L2A" />
+              <el-option label="ORTHO 正射" value="ORTHO" />
+              <el-option label="OTHER 其它" value="OTHER" />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="授权范围">
+            <el-select v-model="metaForm.licenseScope" clearable placeholder="选择" style="width: 100%">
+              <el-option label="仅内部使用" value="INTERNAL" />
+              <el-option label="可用于训练" value="TRAIN" />
+              <el-option label="可公开发表" value="PUBLISH" />
+              <el-option label="允许跨境传输" value="CROSS_BORDER" />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="传感器">
+            <el-input v-model="metaForm.sensorName" placeholder="如 MSI / PMS / WFV" />
+          </el-form-item>
+          <el-form-item label="波段数">
+            <el-input-number v-model="metaForm.bandCount" :min="1" :max="200" :step="1" controls-position="right" style="width: 100%" />
+          </el-form-item>
+          <el-form-item label="供应商">
+            <el-input v-model="metaForm.vendor" placeholder="影像来源方" />
+          </el-form-item>
+          <el-form-item label="采购单号">
+            <el-input v-model="metaForm.orderNo" placeholder="合同/订单号" />
+          </el-form-item>
+          <el-form-item label="交付日期">
+            <el-date-picker v-model="metaForm.deliveryDate" type="date" value-format="YYYY-MM-DD" placeholder="选择日期" style="width: 100%" />
+          </el-form-item>
+          <el-form-item label="价格">
+            <el-input-number v-model="metaForm.price" :min="0" :step="1000" controls-position="right" style="width: 100%" />
+          </el-form-item>
+          <el-form-item label="币种">
+            <el-select v-model="metaForm.priceCurrency" clearable placeholder="CNY" style="width: 100%">
+              <el-option label="人民币 CNY" value="CNY" />
+              <el-option label="美元 USD" value="USD" />
+              <el-option label="欧元 EUR" value="EUR" />
+            </el-select>
+          </el-form-item>
+        </div>
+      </el-form>
+      <div class="meta-tip">
+        留空表示该字段未登记。授权范围直接决定这批影像能不能用于模型训练、能不能对外发表，
+        客户审计时会查这一项。
+      </div>
+      <template #footer>
+        <el-button size="small" @click="metaVisible = false">取消</el-button>
+        <el-button size="small" type="primary" :loading="metaSaving" @click="saveMeta">保存</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -679,9 +751,57 @@ async function toggleFavorite(img: Imagery) {
 function sourceLabel(s: string) {
   return { UPLOAD: '上传', SENTINEL2: 'Sentinel-2', LANDSAT9: 'Landsat-9', GF2: 'GF-2' }[s] || s
 }
+
+// ---- 影像档案元数据 ----
+const metaVisible = ref(false)
+const metaSaving = ref(false)
+const metaRow = ref<Imagery | null>(null)
+const metaForm = reactive<Record<string, any>>({
+  offNadirAngle: null, sunElevation: null, sunAzimuth: null,
+  orthoLevel: '', licenseScope: '', sensorName: '', bandCount: null,
+  vendor: '', orderNo: '', deliveryDate: '', price: null, priceCurrency: 'CNY'
+})
+
+function openMeta(row: Imagery) {
+  metaRow.value = row
+  metaForm.offNadirAngle = row.offNadirAngle ?? null
+  metaForm.sunElevation = row.sunElevation ?? null
+  metaForm.sunAzimuth = row.sunAzimuth ?? null
+  metaForm.orthoLevel = row.orthoLevel || ''
+  metaForm.licenseScope = row.licenseScope || ''
+  metaForm.sensorName = row.sensorName || ''
+  metaForm.bandCount = row.bandCount ?? null
+  metaForm.vendor = row.vendor || ''
+  metaForm.orderNo = row.orderNo || ''
+  metaForm.deliveryDate = row.deliveryDate || ''
+  metaForm.price = row.price ?? null
+  metaForm.priceCurrency = row.priceCurrency || 'CNY'
+  metaVisible.value = true
+}
+
+async function saveMeta() {
+  if (!metaRow.value) return
+  metaSaving.value = true
+  try {
+    await imageryApi.updateMetadata(metaRow.value.id, { ...metaForm })
+    ElMessage.success('元数据已保存')
+    metaVisible.value = false
+    await loadImagery()
+  } catch (e: any) {
+    ElMessage.error(e?.message || '保存失败')
+  } finally {
+    metaSaving.value = false
+  }
+}
 </script>
 
 <style scoped>
+/* 影像档案元数据弹窗 */
+.meta-head { font-size: 13px; color: #1f2937; margin-bottom: 12px; }
+.meta-sub { font-size: 11px; color: #a9aeb8; margin-left: 8px; }
+.meta-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0 14px; }
+.meta-form :deep(.el-form-item) { margin-bottom: 12px; }
+.meta-tip { font-size: 11px; color: #b45309; line-height: 1.7; margin-top: 4px; }
 .star {
   font-size: 15px; color: #c9cdd4; cursor: pointer;
   line-height: 1; user-select: none; display: inline-block;

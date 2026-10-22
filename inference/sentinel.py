@@ -247,9 +247,22 @@ def clip_aoi(feature: dict, aoi: list[list[float]], bands: list[str],
 
     out: dict[str, Any] = {}
     meta: dict[str, Any] = {}
-    for band in bands:
+    # 波段串行下载是主要耗时（每景每波段要拉若干 COG tile，单景 4 波段可达 2-3 分钟）。
+    # 各波段互相独立，用线程池并发拉取；磁盘 tile 缓存仍然生效。
+    def fetch(band: str) -> tuple[str, Any, Any, Any]:
         href = _asset_href(feature, band)
         data, transform, crs = _read_band_window(href, west, south, east, north, max_dim)
+        return band, data, transform, crs
+
+    workers = max(1, min(len(bands), 4))
+    if workers > 1:
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            results = list(pool.map(fetch, bands))
+    else:
+        results = [fetch(b) for b in bands]
+
+    for band, data, transform, crs in results:
         out[band] = data
         meta[band] = {"transform": transform, "crs": crs, "shape": data.shape}
 

@@ -134,6 +134,15 @@ public class ImageryController {
         return ApiResponse.ok(null);
     }
 
+    /** 更新影像档案元数据（离轴角/太阳角/正射等级/授权范围/供应商/价格等 12 项） */
+    @PutMapping("/{id}/metadata")
+    public ApiResponse<Imagery> updateMetadata(@PathVariable long id,
+                                               @RequestBody Map<String, Object> meta,
+                                               Authentication auth) {
+        guard.require(auth, "action:imagery-manage");
+        return ApiResponse.ok(service.updateMetadata(id, meta, auth.getName(), isAdmin(auth)));
+    }
+
     /** 切换收藏：客户星标常用影像，下次一键定位复用 */
     @PutMapping("/{id}/favorite")
     public ApiResponse<Imagery> toggleFavorite(@PathVariable long id,

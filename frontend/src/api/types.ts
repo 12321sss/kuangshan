@@ -227,6 +227,25 @@ export interface Imagery {
   favorite?: boolean
   note?: string
   createdAt: string
+
+  // ---- 影像档案元数据（方案附录 B）----
+  /** 离轴角（度）：越大侧视越强，正射精度越差 */
+  offNadirAngle?: number | null
+  /** 太阳高度角（度）：过低会拉长阴影 */
+  sunElevation?: number | null
+  /** 太阳方位角（度） */
+  sunAzimuth?: number | null
+  /** RAW / L1T / L2A / ORTHO / OTHER */
+  orthoLevel?: string | null
+  /** INTERNAL / TRAIN / PUBLISH / CROSS_BORDER */
+  licenseScope?: string | null
+  vendor?: string | null
+  price?: number | null
+  priceCurrency?: string | null
+  orderNo?: string | null
+  deliveryDate?: string | null
+  bandCount?: number | null
+  sensorName?: string | null
 }
 
 /** 上传时可选的坐标系 */
@@ -522,4 +541,118 @@ export interface SpatialRelationsResult {
   permitSource?: string
   disclaimer?: string
   generatedAt?: string
+}
+
+// ============================================================
+// 监督分类（精细模式）
+// ============================================================
+
+/** 可选分析区（来自边界管理导入的边界，含外环） */
+export interface AoiOption {
+  id: number
+  name: string
+  boundaryType: 'PERMIT' | 'DISTURBANCE' | 'ECO'
+  areaHa: number
+  ring: number[][]
+}
+
+export interface ClassifySample {
+  classType: string
+  lng: number
+  lat: number
+}
+
+export interface ClassifyClassResult {
+  classType: string
+  label: string
+  color: string
+  areaHa: number
+  pixelCount: number
+  pctOfAoi: number
+  featureCount: number
+  sampleCount: number
+  precision: number
+  recall: number
+  f1: number
+  /** 制图精度（= recall） */
+  producerAccuracy: number
+  /** 用户精度（= precision） */
+  userAccuracy: number
+  validationCount: number
+}
+
+export interface SupervisedResult {
+  available: boolean
+  message?: string
+  projectName?: string
+  scene?: { id: string; datetime: string; cloudCover: number }
+  grid?: { width: number; height: number; featureCount: number; validPixels: number }
+  classes?: ClassifyClassResult[]
+  /** 各类 GeoJSON 要素，保存解译记录时直接复用 */
+  features?: Record<string, Array<{ type: string; properties: any; geometry: any }>>
+  accuracy?: {
+    overallAccuracy: number
+    kappa: number
+    oobScore: number | null
+    labels: string[]
+    labelNames: string[]
+    confusionMatrix: number[][]
+    sampleCount: number
+    validationCount: number
+    split: string
+  }
+  featureImportance?: Array<{ name: string; importance: number }>
+  imageBase64?: string | null
+  method?: string
+  samples?: Array<{ classType: string; count: number }>
+  warnings?: string[]
+  disclaimer?: string
+}
+
+// ============================================================
+// 周尺度监测：影像可用性（L1）+ 突变事件（L2）
+// ============================================================
+
+export interface AvailabilityResult {
+  level: string
+  message: string
+  advice: string
+  range: { start: string; end: string; days: number }
+  sceneCount: number
+  scenes: Array<{ id: string; date: string; datetime: string; cloudCover: number; platform?: string }>
+  relaxedCloudCount: number
+  maxCloud: number
+  note: string
+}
+
+export interface ChangePatch {
+  lng: number
+  lat: number
+  areaHa: number
+  perimeterM: number
+}
+
+export interface ChangeEventItem {
+  type: string
+  label: string
+  color: string
+  count: number
+  totalAreaHa: number
+  patches: ChangePatch[]
+}
+
+export interface ChangeEventsResult {
+  periods: {
+    first: { id: string; datetime: string; cloudCover: number; range: string[] }
+    second: { id: string; datetime: string; cloudCover: number; range: string[] }
+  }
+  events: ChangeEventItem[]
+  totalEvents: number
+  conclusion: string
+  warnings: string[]
+  params: { maxCloud: number; minAreaHa: number }
+  grid: { width: number; height: number; pixelAreaHa: number }
+  imageBase64?: string | null
+  legend: Array<{ label: string; color: string }>
+  disclaimer: string
 }

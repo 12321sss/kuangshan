@@ -2,7 +2,8 @@ import http from './http'
 import type {
   AdminUser, Alarm, AreaTimeseriesResult, CrsOption, DisplacementSeries, Extraction, Imagery,
   InterpretTask, OverviewStats, PermCatalog, PitForecast, PitYearly, Project, Role, SafetyEvaluation,
-  SceneItem, ScreenSummary, Sensor, SensorDataPoint, SlopeUnitsResult, SpatialRelationsResult, Station,
+  AvailabilityResult, AoiOption, ChangeEventsResult, ClassifySample, SceneItem, ScreenSummary,
+  Sensor, SensorDataPoint, SlopeUnitsResult, SpatialRelationsResult, Station, SupervisedResult,
   TimeSeriesFrame,
   TimeSeriesGroup, VegetationYearly, WarningRule
 } from './types'
@@ -72,6 +73,46 @@ export const stationApi = {
 }
 
 export const analysisApi = {
+  /** 可选分析区（来自「边界管理」导入的边界，含外环） */
+  aoiOptions: (projectId: number): Promise<{ options: AoiOption[]; permitAreaNote?: string }> =>
+    http.get('/analysis/aoi-options', { params: { projectId } }),
+
+  /** 监督分类：选样本 → 随机森林 → 混淆矩阵/OA/Kappa */
+  classifySupervised: (body: {
+    projectId: number
+    aoi?: number[][]
+    samples: ClassifySample[]
+    start: string
+    end: string
+    maxCloud?: number
+    maxDim?: number
+    minSamples?: number
+  }): Promise<SupervisedResult> =>
+    http.post('/analysis/classify-supervised', body, { timeout: 420000 }),
+
+  /** L1：最近 N 天影像可用性 */
+  monitorAvailability: (body: {
+    projectId: number
+    aoi?: number[][]
+    days?: number
+    maxCloud?: number
+  }): Promise<AvailabilityResult> =>
+    http.post('/analysis/monitor-availability', body, { timeout: 120000 }),
+
+  /** L2：两期突变事件检测 */
+  changeEvents: (body: {
+    projectId: number
+    aoi?: number[][]
+    d1Start: string
+    d1End: string
+    d2Start: string
+    d2End: string
+    maxCloud?: number
+    minAreaHa?: number
+    withImage?: boolean
+  }): Promise<ChangeEventsResult> =>
+    http.post('/analysis/change-events', body, { timeout: 420000 }),
+
   /**
    * 趋势研判（B4）+ 持续复绿判定（C3）
    * 结论口径：扰动扩张/收缩、植被"持续复绿"（不等于生态修复成功）
@@ -261,6 +302,9 @@ export const imageryApi = {
   get: (id: number): Promise<Imagery> => http.get(`/imagery/${id}`),
   /** 可选坐标系列表（上传时选择） */
   crsOptions: (): Promise<CrsOption[]> => http.get('/imagery/crs-options'),
+  /** 更新影像档案元数据（离轴角/正射等级/授权范围/供应商等 12 项） */
+  updateMetadata: (id: number, meta: Record<string, any>): Promise<Imagery> =>
+    http.put(`/imagery/${id}/metadata`, meta),
   /** 检索 Sentinel-2 公开场景
    *  实测后端转发 Copernicus 需 20-30 秒（跨境 + 云量属性过滤），
    *  必须单独给更长超时，否则会被全局 15s 掐断并误报「网络异常」 */

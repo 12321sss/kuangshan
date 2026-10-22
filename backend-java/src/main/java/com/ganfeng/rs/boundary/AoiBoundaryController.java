@@ -233,6 +233,20 @@ public class AoiBoundaryController {
     // 供其他模块复用：取某项目的矿权外环（越界检测基准）
     // ------------------------------------------------------------------
 
+    /**
+     * 带几何的边界列表（不做权限校验，调用方必须自己校验项目访问权）。
+     * 分析类页面需要一次拿到「名称 + 类型 + 面积 + 外环」做下拉选择，避免 N+1 请求。
+     */
+    public List<Map<String, Object>> listForProject(Long projectId) {
+        List<Map<String, Object>> out = new ArrayList<>();
+        for (AoiBoundary b : repo.findByProjectIdOrderByCreatedAtDesc(projectId)) {
+            Map<String, Object> m = brief(b);
+            m.put("geometry", readGeometry(b.getGeometryJson()));
+            out.add(m);
+        }
+        return out;
+    }
+
     /** 取最大的那条矿权边界的外环；没有则返回空列表 */
     public List<List<Double>> permitRing(Long projectId) {
         List<AoiBoundary> rows = repo.findByProjectIdAndBoundaryTypeOrderByCreatedAtDesc(projectId, "PERMIT");

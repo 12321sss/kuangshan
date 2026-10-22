@@ -245,8 +245,13 @@ const moduleMenus: Record<string, MenuGroup[]> = {
       title: '解译作业',
       items: [
         { path: '/remote-extract', title: '在线解译', perm: 'page:extract' },
+        { path: '/classify', title: '监督分类', perm: 'page:extract' },
         { path: '/extract', title: '本地解译', perm: 'page:extract' }
       ]
+    },
+    {
+      title: '持续监测',
+      items: [{ path: '/change-monitor', title: '变化监测', perm: 'page:extract' }]
     },
     {
       title: '结果比对',

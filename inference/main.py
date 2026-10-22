@@ -1021,6 +1021,119 @@ def slope_analyze(req: SlopeRequest):
 
 
 # ---------------------------------------------------------------------------
+# 监督分类（精细模式）：选样本 → 随机森林 → 混淆矩阵 / OA / Kappa
+# ---------------------------------------------------------------------------
+import supervised as supervised_mod  # noqa: E402
+
+
+class SamplePoint(BaseModel):
+    classType: str = Field(..., description="PIT/DUMP/TAILINGS/BARE/ROAD/VEGETATION/WATER")
+    lng: float
+    lat: float
+
+
+class ClassifyRequest(BaseModel):
+    model_config = {"populate_by_name": True}
+
+    aoi: list[list[float]] = Field(..., description="分析区环（WGS84）")
+    samples: list[SamplePoint] = Field(default_factory=list)
+    start: str = Field(..., description="影像起始日期 YYYY-MM-DD")
+    end: str = Field(..., description="影像结束日期 YYYY-MM-DD")
+    maxCloud: float = Field(20, description="云量上限 %")
+    maxDim: int = Field(1024, description="栅格最大边长，控制耗时")
+    minSamples: int = Field(8, description="每类最少样本数")
+    minAreaPx: int = Field(30, description="最小图斑像元数")
+
+
+@app.post("/api/v1/classify/supervised")
+def classify_supervised(req: ClassifyRequest):
+    """监督分类：能给出 OA/Kappa/各类 PA·UA，用于回答「准确率多少」
+
+    口径：精度只对本 AOI 与本景有效；10m 分辨率分不出采坑内部台阶。
+    """
+    try:
+        data = supervised_mod.classify({
+            "aoi": req.aoi,
+            "samples": [s.model_dump() for s in req.samples],
+            "start": req.start,
+            "end": req.end,
+            "maxCloud": req.maxCloud,
+            "maxDim": max(256, min(req.maxDim, 2048)),
+            "minSamples": max(3, req.minSamples),
+            "minAreaPx": max(1, req.minAreaPx),
+        })
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail=f"监督分类失败: {e}") from e
+    return {"code": 0, "message": "success", "data": data}
+
+
+# ---------------------------------------------------------------------------
+# 周尺度监测：影像可用性（L1）+ 突变事件检测（L2）
+# ---------------------------------------------------------------------------
+import change as change_mod  # noqa: E402
+
+
+class AvailabilityRequest(BaseModel):
+    aoi: list[list[float]]
+    days: int = Field(30, description="往前看多少天")
+    maxCloud: float = Field(20, description="云量上限 %")
+
+
+@app.post("/api/v1/monitor/availability")
+def monitor_availability(req: AvailabilityRequest):
+    """L1：最近 N 天有没有可用影像（没有就说没有，不能报「无变化」）"""
+    try:
+        data = change_mod.availability({
+            "aoi": req.aoi,
+            "days": max(3, min(req.days, 365)),
+            "maxCloud": max(1, min(req.maxCloud, 100)),
+        })
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail=f"影像可用性检查失败: {e}") from e
+    return {"code": 0, "message": "success", "data": data}
+
+
+class ChangeRequest(BaseModel):
+    model_config = {"populate_by_name": True}
+
+    aoi: list[list[float]]
+    d1Start: str
+    d1End: str
+    d2Start: str
+    d2End: str
+    maxCloud: float = 20
+    minAreaHa: float = Field(0.2, description="斑块最小面积（公顷）")
+    maxDim: int = Field(768)
+    withImage: bool = Field(True, alias="withImage")
+
+
+@app.post("/api/v1/monitor/change-events")
+def monitor_change_events(req: ChangeRequest):
+    """L2：两期指数差值 → 突变斑块（新增水体/裸地、植被恢复、水体消失）"""
+    try:
+        data = change_mod.detect({
+            "aoi": req.aoi,
+            "d1Start": req.d1Start,
+            "d1End": req.d1End,
+            "d2Start": req.d2Start,
+            "d2End": req.d2End,
+            "maxCloud": req.maxCloud,
+            "minAreaHa": max(0.01, req.minAreaHa),
+            "maxDim": max(256, min(req.maxDim, 1536)),
+            "withImage": req.withImage,
+        })
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail=f"突变检测失败: {e}") from e
+    return {"code": 0, "message": "success", "data": data}
+
+
+# ---------------------------------------------------------------------------
 # 空间关系与专项风险（B6/B7/B8/B9/C4/A3）
 # ---------------------------------------------------------------------------
 import spatial as spatial_mod  # noqa: E402

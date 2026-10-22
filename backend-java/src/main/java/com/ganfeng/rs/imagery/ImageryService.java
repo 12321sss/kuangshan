@@ -210,6 +210,112 @@ public class ImageryService {
         return repo.save(img);
     }
 
+    /**
+     * 更新影像档案元数据（方案附录 B）
+     *
+     * 单独一个入口而不是塞进上传表单：供应商、授权范围、单价这类信息
+     * 往往是影像入库后才拿到的（走采购/法务流程），上传时未必齐全。
+     * 这里做白名单 + 范围校验，避免把"离轴角 999 度"这种脏数据写进档案。
+     */
+    @Transactional
+    public Imagery updateMetadata(long id, java.util.Map<String, Object> meta,
+                                  String username, boolean isAdmin) {
+        Imagery img = get(id, username, isAdmin);
+        if (meta == null || meta.isEmpty()) {
+            throw BizException.badRequest("没有需要更新的元数据");
+        }
+
+        if (meta.containsKey("offNadirAngle")) {
+            img.setOffNadirAngle(range(meta.get("offNadirAngle"), 0, 65, "离轴角"));
+        }
+        if (meta.containsKey("sunElevation")) {
+            img.setSunElevation(range(meta.get("sunElevation"), 0, 90, "太阳高度角"));
+        }
+        if (meta.containsKey("sunAzimuth")) {
+            img.setSunAzimuth(range(meta.get("sunAzimuth"), 0, 360, "太阳方位角"));
+        }
+        if (meta.containsKey("orthoLevel")) {
+            img.setOrthoLevel(oneOf(meta.get("orthoLevel"),
+                    java.util.List.of("RAW", "L1T", "L2A", "ORTHO", "OTHER"), "正射等级"));
+        }
+        if (meta.containsKey("licenseScope")) {
+            img.setLicenseScope(oneOf(meta.get("licenseScope"),
+                    java.util.List.of("INTERNAL", "TRAIN", "PUBLISH", "CROSS_BORDER"), "授权范围"));
+        }
+        if (meta.containsKey("vendor")) {
+            img.setVendor(text(meta.get("vendor"), 128, "供应商"));
+        }
+        if (meta.containsKey("price")) {
+            img.setPrice(range(meta.get("price"), 0, 1e10, "价格"));
+        }
+        if (meta.containsKey("priceCurrency")) {
+            img.setPriceCurrency(oneOf(meta.get("priceCurrency"),
+                    java.util.List.of("CNY", "USD", "EUR"), "币种"));
+        }
+        if (meta.containsKey("orderNo")) {
+            img.setOrderNo(text(meta.get("orderNo"), 64, "采购单号"));
+        }
+        if (meta.containsKey("deliveryDate")) {
+            Object v = meta.get("deliveryDate");
+            if (v == null || String.valueOf(v).isBlank()) {
+                img.setDeliveryDate(null);
+            } else {
+                try {
+                    img.setDeliveryDate(java.time.LocalDate.parse(String.valueOf(v).substring(0, 10)));
+                } catch (Exception e) {
+                    throw BizException.badRequest("交付日期格式应为 YYYY-MM-DD");
+                }
+            }
+        }
+        if (meta.containsKey("bandCount")) {
+            Object v = meta.get("bandCount");
+            if (v == null || String.valueOf(v).isBlank()) {
+                img.setBandCount(null);
+            } else {
+                Double n = range(v, 1, 200, "波段数");
+                img.setBandCount(n == null ? null : n.intValue());
+            }
+        }
+        if (meta.containsKey("sensorName")) {
+            img.setSensorName(text(meta.get("sensorName"), 32, "传感器"));
+        }
+        return repo.save(img);
+    }
+
+    /** 数值范围校验（空值允许，表示清空该字段） */
+    private Double range(Object v, double min, double max, String label) {
+        if (v == null || String.valueOf(v).isBlank()) return null;
+        double d;
+        try {
+            d = Double.parseDouble(String.valueOf(v));
+        } catch (NumberFormatException e) {
+            throw BizException.badRequest(label + "必须是数字");
+        }
+        if (d < min || d > max) {
+            throw BizException.badRequest(label + "应在 " + (int) min + " ~ " + (int) max + " 之间");
+        }
+        return d;
+    }
+
+    private String oneOf(Object v, java.util.List<String> allowed, String label) {
+        if (v == null || String.valueOf(v).isBlank()) return null;
+        String s = String.valueOf(v).trim().toUpperCase();
+        if (!allowed.contains(s)) {
+            throw BizException.badRequest(label + "只能是：" + String.join(" / ", allowed));
+        }
+        return s;
+    }
+
+    private String text(Object v, int maxLen, String label) {
+        if (v == null) return null;
+        String s = String.valueOf(v).trim();
+        if (s.isEmpty()) return null;
+        if (s.length() > maxLen) {
+            throw BizException.badRequest(label + "不能超过 " + maxLen + " 个字符");
+        }
+        return s;
+    }
+
     @Transactional
     public void delete(long id) {
         Imagery img = get(id);        // 仅删除本地上传文件；公开数据源无本地文件
