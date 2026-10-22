@@ -8,6 +8,23 @@
           {{ drawing ? '圈选中（左键加点·右键结束）' : '圈选 AOI' }}
         </el-button>
         <el-button size="small" :disabled="aoi.length === 0" @click="clearAoi">清除圈选</el-button>
+        <!-- 客户给的边界直接当 AOI：上传影像 + 矿权边界是最常见的组合 -->
+        <el-select
+          v-model="boundaryPick"
+          size="small"
+          clearable
+          placeholder="从边界加载"
+          style="width: 160px"
+          :loading="boundaryLoading"
+          @change="applyBoundaryPick"
+        >
+          <el-option
+            v-for="b in boundaryOptions"
+            :key="b.id"
+            :label="`${b.name}（${b.areaHa} ha）`"
+            :value="b.id"
+          />
+        </el-select>
         <span v-if="aoiAreaText" class="aoi-info">AOI 面积：{{ aoiAreaText }}</span>
       </div>
       <div v-if="!hasToken" class="token-notice">未配置天地图密钥，底图未加载</div>
@@ -20,12 +37,14 @@
         <el-form label-width="80px" size="default">
           <el-form-item label="提取类型">
             <el-select v-model="form.classType" style="width: 100%">
-              <el-option value="VEGETATION" label="植被（NDVI）" />
-              <el-option value="WATER" label="水体（NDWI）" />
-              <el-option value="PIT" label="露天采坑" />
-              <el-option value="DUMP" label="排土场/废石堆" />
-              <el-option value="BARE" label="裸地/施工扰动" />
+              <el-option
+                v-for="c in classChoices"
+                :key="c.value"
+                :value="c.value"
+                :label="c.label"
+              />
             </el-select>
+            <div class="form-note">{{ classHint }}</div>
           </el-form-item>
           <el-form-item label="选择影像" required>
             <el-select v-model="selectedImageryId" placeholder="从影像库选择" style="width: 100%">
@@ -131,7 +150,7 @@ import {
   ScreenSpaceEventHandler, ScreenSpaceEventType, Cartographic,
   CallbackProperty, PolygonHierarchy, Rectangle
 } from 'cesium'
-import { extractionApi, imageryApi } from '@/api'
+import { extractionApi, imageryApi, boundaryApi } from '@/api'
 import { haToKm2 } from '@/utils/format'
 import TimeSeriesPanel from '@/components/TimeSeriesPanel.vue'
 import { tiandituBaseLayers } from '@/map/basemap'
@@ -148,6 +167,17 @@ const projectStore = useProjectStore()
 const cesiumRef = ref<HTMLDivElement>()
 const hasToken = !!TIANDITU_TOKEN
 const years = [2020, 2021, 2022, 2023, 2024, 2025, 2026]
+
+/** 七类地物：与在线解译、监督分类、方案表 6 保持同一套编码 */
+const classChoices = [
+  { value: 'PIT', label: '露天采坑', hint: '偏暗、台阶阴影多。注意：本地影像无 DEM 时与排土场/尾矿光谱重叠，统一按人工扰动裸地提取' },
+  { value: 'DUMP', label: '排土场/废石堆', hint: '松散堆积、中高亮。本地影像同样并入扰动裸地，细分请用「监督分类」' },
+  { value: 'TAILINGS', label: '尾矿设施', hint: '细粒高反射接近白色。本地影像同样并入扰动裸地，细分请用「监督分类」' },
+  { value: 'BARE', label: '裸地/施工扰动', hint: '泛裸土，判据：低植被 + 非水体 + 短波红外信号' },
+  { value: 'ROAD', label: '道路/工业设施', hint: '狭长形状，判据：亮度偏高 + 长宽比/紧凑度形态过滤' },
+  { value: 'VEGETATION', label: '植被', hint: '判据：NDVI > 0.25；复绿趋势看这一类' },
+  { value: 'WATER', label: '水体', hint: '判据：MNDWI > 0；坑内积水、尾矿库水面都靠它' }
+]
 
 const form = reactive({ classType: 'VEGETATION', satellite: 'SENTINEL2', year: 2025, name: '' })
 const extracting = ref(false)
@@ -175,6 +205,12 @@ let aoiPoints: Entity[] = []
 let resultEntities: Entity[] = []
 
 // ---- 标注 ----
+
+/** 当前类型的判别依据，避免用户面对 7 个选项不知道选哪个 */
+const classHint = computed(() => {
+  const c = classChoices.find((x) => x.value === form.classType)
+  return c ? c.hint : ''
+})
 
 const aoiAreaText = computed(() => {
   if (aoi.value.length < 3) return ''
@@ -265,6 +301,53 @@ function Cesium_toDeg(rad: number) {
 
 function activeAoi(): number[][] {
   return aoiFloat ? [...aoi.value, aoiFloat] : aoi.value
+}
+
+// ---- 从边界加载 AOI ----
+const boundaryOptions = ref<Array<{ id: number; name: string; areaHa: number }>>([])
+const boundaryPick = ref<number | null>(null)
+const boundaryLoading = ref(false)
+
+async function loadBoundaryOptions() {
+  const pid = projectStore.currentId
+  if (!pid) return
+  boundaryLoading.value = true
+  try {
+    const rows = await boundaryApi.list(pid)
+    boundaryOptions.value = rows.map((r) => ({ id: r.id, name: r.name, areaHa: r.areaHa }))
+  } catch {
+    boundaryOptions.value = []
+  } finally {
+    boundaryLoading.value = false
+  }
+}
+
+async function applyBoundaryPick(id: number | null) {
+  if (!id) return
+  try {
+    const detail = await boundaryApi.get(id)
+    const outer = detail.geometry?.outer
+    if (!outer || outer.length < 3) {
+      ElMessage.warning('该边界没有有效外环，无法作为 AOI')
+      return
+    }
+    // 去掉闭合环的重复末点
+    aoi.value = outer.filter((p, i) => i === 0 || p[0] !== outer[0][0] || p[1] !== outer[0][1])
+    refreshAoiShape()
+    const lngs = aoi.value.map((p) => p[0])
+    const lats = aoi.value.map((p) => p[1])
+    const cx = (Math.min(...lngs) + Math.max(...lngs)) / 2
+    const cy = (Math.min(...lats) + Math.max(...lats)) / 2
+    const span = Math.max(Math.max(...lngs) - Math.min(...lngs), Math.max(...lats) - Math.min(...lats))
+    viewer?.camera.flyTo({
+      destination: Cartesian3.fromDegrees(cx, cy, Math.max(1200, span * 111000 * 1.6)),
+      orientation: { heading: 0, pitch: -Math.PI / 3 },
+      duration: 1.2
+    })
+    ElMessage.success(`已加载边界「${detail.name}」作为 AOI（${detail.areaHa} ha）`)
+  } catch {
+    ElMessage.error('边界加载失败')
+  }
 }
 
 function refreshAoiShape() {
@@ -548,6 +631,8 @@ function ringAreaHa(ring: number[][]): number {
 // ---- 生命周期 ----
 
 onMounted(() => {
+  // 先拉边界列表（即使三维底图不可用，边界下拉也要能用）
+  loadBoundaryOptions()
   if (!cesiumRef.value) return
   const layers = hasToken ? (() => {
     const { base, label } = tiandituBaseLayers('img')

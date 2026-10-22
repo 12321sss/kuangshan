@@ -14,10 +14,11 @@
           v-for="g in groups"
           :key="g.signature"
           :value="g.signature"
-          :label="`${g.label} · ${g.periodCount}期`"
+          :label="`${g.label} · ${classLabel(g.classType)} · ${g.periodCount}期`"
         />
       </el-select>
       <span v-if="currentGroup" class="ts-summary">
+        <el-tag size="small" effect="plain" class="ts-class">{{ classLabel(currentGroup.classType) }}</el-tag>
         {{ currentGroup.startDate }} → {{ currentGroup.endDate }}
         <b :class="currentGroup.areaChangeHa >= 0 ? 'up' : 'down'">
           {{ currentGroup.areaChangeHa >= 0 ? '+' : '' }}{{ haToKm2(currentGroup.areaChangeHa) }} km²
@@ -94,6 +95,15 @@ const props = defineProps<{
 }>()
 
 const emit = defineEmits<{ (e: 'frame', item: Record<string, unknown> | null): void }>()
+
+/** 地物类型中文名：分组已按「区域+类型」拆开，这里把类型码翻译成人话 */
+const CLASS_LABEL: Record<string, string> = {
+  PIT: '露天采坑', DUMP: '排土场', TAILINGS: '尾矿', BARE: '裸地扰动',
+  ROAD: '道路', VEGETATION: '植被', WATER: '水体', BUILDING: '建筑', MOUNTAIN: '山体'
+}
+function classLabel(code: string) {
+  return CLASS_LABEL[code] || code || ''
+}
 
 const groups = ref<any[]>([])
 const sequence = ref<any[]>([])
@@ -241,6 +251,7 @@ loadGroups()
   font-size: 13px;
   font-weight: 500;
 }
+.ts-class { margin-right: 6px; }
 .ts-summary {
   font-size: 12px;
   color: var(--el-text-color-secondary);

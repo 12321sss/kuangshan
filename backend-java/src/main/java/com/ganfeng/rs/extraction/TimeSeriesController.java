@@ -42,18 +42,22 @@ public class TimeSeriesController {
         List<Extraction> all = service.list(projectId, auth.getName(),
                 guard.roleCodesOf(auth).contains("ADMIN"));
 
-        // 按 signature 聚合（无 signature 的旧数据跳过）
+        // 分组键 = 区域指纹 + 地物类型
+        //
+        // 为什么必须带类型：同一块地会分别提取植被/裸地/采坑，如果只按区域指纹分组，
+        // 播放时会把「植被 2022 → 裸地 2022 → 采坑 2023」当成同一序列，看着像时间变化，
+        // 实际是不同地物混在一起（用户看到的就是这个问题）。
         Map<String, List<Extraction>> grouped = new LinkedHashMap<>();
         for (Extraction e : all) {
             String sig = e.getAoiSignature();
             if (sig == null || sig.isBlank()) {
                 continue;
             }
-            grouped.computeIfAbsent(sig, k -> new ArrayList<>()).add(e);
+            grouped.computeIfAbsent(sig + "|" + e.getClassType(), k -> new ArrayList<>()).add(e);
         }
 
         List<Map<String, Object>> out = new ArrayList<>();
-        grouped.forEach((sig, items) -> {
+        grouped.forEach((groupKey, items) -> {
             // 组内按拍摄日期升序（时序播放顺序）
             items.sort(Comparator.comparing(
                     (Extraction x) -> x.getAcquisitionDate() == null ? "" : x.getAcquisitionDate().toString())
@@ -64,7 +68,8 @@ public class TimeSeriesController {
             double areaChange = last.getExtractAreaHa() - first.getExtractAreaHa();
 
             Map<String, Object> g = new LinkedHashMap<>();
-            g.put("signature", sig);
+            // 组合键（区域|类型），前端原样回传给详情接口
+            g.put("signature", groupKey);
             g.put("aoiJson", first.getAoiJson());
             g.put("classType", first.getClassType());
             g.put("periodCount", items.size());
@@ -77,8 +82,9 @@ public class TimeSeriesController {
                     ? Math.round(areaChange / first.getExtractAreaHa() * 1000.0) / 10.0 : 0.0);
             // 展示名：用 AOI 面积（km²）+ 地物类型，便于用户辨认区域
             double aoiHa = first.getAoiAreaHa() != null ? first.getAoiAreaHa() : 0;
-            g.put("label", Math.round(aoiHa / 100.0 * 100.0) / 100.0
-                    + " km² · " + (first.getClassType()));
+            // 同时给出原始区域指纹，便于其它页面按区域再筛选
+            g.put("aoiSignature", first.getAoiSignature());
+            g.put("label", Math.round(aoiHa / 100.0 * 100.0) / 100.0 + " km²");
             out.add(g);
         });
 
@@ -94,14 +100,27 @@ public class TimeSeriesController {
      */
     @GetMapping("/{signature}")
     public ApiResponse<List<Map<String, Object>>> sequence(@PathVariable String signature,
+                                                          @RequestParam(required = false) String classType,
                                                           Authentication auth) {
+        // signature 可能是「区域指纹|类型」的组合键，也可能是纯区域指纹（兼容旧前端）
+        String aoiSig = signature;
+        String cls = classType;
+        int sep = signature.indexOf('|');
+        if (sep > 0) {
+            aoiSig = signature.substring(0, sep);
+            if (cls == null || cls.isBlank()) {
+                cls = signature.substring(sep + 1);
+            }
+        }
+        final String filterClass = (cls == null || cls.isBlank()) ? null : cls;
+
         List<Extraction> all = service.list(null, auth.getName(),
                 guard.roleCodesOf(auth).contains("ADMIN"));
         List<Extraction> items = new ArrayList<>();
         for (Extraction e : all) {
-            if (signature.equals(e.getAoiSignature())) {
-                items.add(e);
-            }
+            if (!aoiSig.equals(e.getAoiSignature())) continue;
+            if (filterClass != null && !filterClass.equals(e.getClassType())) continue;
+            items.add(e);
         }
         items.sort(Comparator.comparing(
                 (Extraction x) -> x.getAcquisitionDate() == null ? "" : x.getAcquisitionDate().toString())

@@ -12,6 +12,10 @@
                           start-placeholder="起始" end-placeholder="结束" style="width: 230px" />
           <span class="lbl">云量</span>
           <el-input-number v-model="maxCloud" :min="1" :max="100" :step="5" size="small" style="width: 80px" />
+          <el-radio-group v-model="combo" size="small" @change="onComboChange">
+            <el-radio-button value="TRUE_COLOR">真彩</el-radio-button>
+            <el-radio-button value="FALSE_COLOR">假彩(近红外)</el-radio-button>
+          </el-radio-group>
           <el-button size="small" :loading="loadingImg" @click="loadPreview">加载影像</el-button>
         </div>
       </div>
@@ -25,8 +29,11 @@
       <el-card shadow="never" class="map-card">
         <template #header>
           <div class="card-head">
-            <span>真彩影像与样本点</span>
-            <span class="card-hint">左键点选样本 · 滚轮缩放 · 右键拖动平移</span>
+            <span>影像与样本点</span>
+            <div class="head-right">
+              <span class="card-hint">左键点选 · 滚轮缩放 · 右键拖动</span>
+              <el-button link type="primary" size="small" :disabled="!image" @click="fitToBox">适应窗口</el-button>
+            </div>
           </div>
         </template>
         <div ref="boxRef" class="viewer" @wheel.prevent="onWheel" @contextmenu.prevent
@@ -45,6 +52,12 @@
           </div>
           <div v-if="loadingImg" class="viewer-empty">影像加载中…（首次需下载瓦片，约 20-60 秒）</div>
           <div class="zoom-tip">×{{ scale.toFixed(1) }}</div>
+        </div>
+
+        <!-- 分辨率诊断：区域太小或影像太粗时，选点会很不准，必须提前说清 -->
+        <div v-if="resHint" class="res-hint" :class="{ warn: resWarn }">
+          <el-icon><WarningFilled v-if="resWarn" /><InfoFilled v-else /></el-icon>
+          <span>{{ resHint }}</span>
         </div>
       </el-card>
 
@@ -165,8 +178,9 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
+import { WarningFilled, InfoFilled } from '@element-plus/icons-vue'
 import { analysisApi, extractionApi } from '@/api'
 import type { AoiOption, ClassifySample, SupervisedResult } from '@/api'
 import { sentinelApi } from '@/api/sentinel'
@@ -194,7 +208,10 @@ const range = ref<[string, string]>([
 const maxCloud = ref(20)
 
 const image = ref<string>('')
+/** 显示组合：真彩便于认地物，假彩（近红外）便于区分植被与裸地 */
+const combo = ref<'TRUE_COLOR' | 'FALSE_COLOR'>('TRUE_COLOR')
 const bbox = ref<{ west: number; south: number; east: number; north: number } | null>(null)
+const resWarn = ref(false)
 const loadingImg = ref(false)
 const imgNatural = ref<{ w: number; h: number }>({ w: 0, h: 0 })
 
@@ -276,7 +293,7 @@ async function loadPreview() {
   }
   loadingImg.value = true
   try {
-    const res = await sentinelApi.preview(opt.ring, range.value[0], range.value[1], maxCloud.value, 'TRUE_COLOR')
+    const res = await sentinelApi.preview(opt.ring, range.value[0], range.value[1], maxCloud.value, combo.value)
     image.value = res.image_base64
     const lngs = opt.ring.map((p) => p[0])
     const lats = opt.ring.map((p) => p[1])
@@ -294,10 +311,47 @@ async function loadPreview() {
   }
 }
 
-function onImgLoad() {
+async function onImgLoad() {
   const el = imgRef.value
-  if (el) imgNatural.value = { w: el.naturalWidth, h: el.naturalHeight }
+  if (!el) return
+  imgNatural.value = { w: el.naturalWidth, h: el.naturalHeight }
+  await nextTick()
+  fitToBox()
 }
+
+/** 让影像铺满可视区：默认 1 倍时小区域只有几十像素，用户根本没法点 */
+function fitToBox() {
+  const box = boxRef.value?.getBoundingClientRect()
+  const img = imgRef.value
+  if (!box || !img || !img.naturalWidth) return
+  const s = Math.min((box.width - 24) / img.naturalWidth, (box.height - 24) / img.naturalHeight)
+  scale.value = Math.max(1, Math.min(12, s))
+  offset.value = {
+    x: (box.width - img.naturalWidth * scale.value) / 2,
+    y: (box.height - img.naturalHeight * scale.value) / 2
+  }
+}
+
+function onComboChange() {
+  if (image.value) loadPreview()
+}
+
+/** 分辨率诊断：像素数太少时选点没有意义，要明确告诉用户并给替代方案 */
+const resHint = computed(() => {
+  const b = bbox.value
+  const nat = imgNatural.value
+  if (!b || !nat.w || !nat.h) return ''
+  const lat0 = (b.south + b.north) / 2
+  const metersX = (b.east - b.west) * 111320 * Math.cos((lat0 * Math.PI) / 180)
+  const mPerPx = metersX / nat.w
+  const wPx = nat.w
+  const hPx = nat.h
+  resWarn.value = wPx < 60 || hPx < 60
+  if (resWarn.value) {
+    return `本区域只有 ${wPx}×${hPx} 像素（每像素约 ${mPerPx.toFixed(1)} m）。区域太小，选点会很粗——建议导入更大范围的边界（如整个矿区），或改用更高分辨率影像。`
+  }
+  return `影像 ${wPx}×${hPx} 像素，每像素约 ${mPerPx.toFixed(1)} m。样本点请分散在各类图斑内部，避开边缘 2~3 个像元。`
+})
 
 // ---- 缩放与平移 ----
 function onWheel(e: WheelEvent) {
@@ -428,6 +482,7 @@ watch(() => projectStore.currentId, () => {
 @media (max-width: 1400px) { .main { grid-template-columns: 1fr; } }
 
 .card-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.head-right { display: flex; align-items: center; gap: 6px; }
 .card-hint { font-size: 11px; color: #a9aeb8; }
 
 .map-card :deep(.el-card__body) { padding: 8px; }
@@ -450,6 +505,15 @@ watch(() => projectStore.currentId, () => {
   position: absolute; right: 8px; bottom: 8px; padding: 2px 6px;
   background: rgba(0, 0, 0, 0.45); color: #fff; font-size: 11px; border-radius: 4px;
 }
+
+.res-hint {
+  display: flex; align-items: flex-start; gap: 6px;
+  margin-top: 8px; padding: 7px 9px; border-radius: 6px;
+  background: #f0fdfa; border: 1px solid #ccfbf1;
+  font-size: 11px; color: #0f766e; line-height: 1.6;
+}
+.res-hint.warn { background: #fffbeb; border-color: #fde68a; color: #b45309; }
+.res-hint :deep(.el-icon) { margin-top: 2px; }
 
 .side { display: flex; flex-direction: column; gap: 12px; }
 .class-chips { display: flex; flex-wrap: wrap; gap: 6px; }

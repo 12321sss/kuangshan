@@ -10,8 +10,25 @@
           {{ drawing ? '圈选中（左键加点·右键结束）' : '圈选 AOI' }}
         </el-button>
         <el-button size="small" :disabled="aoi.length === 0" @click="clearAoi">清除</el-button>
+        <!-- 从「边界管理」导入的边界直接当 AOI：客户给的矿权边界不该再手圈一遍 -->
+        <el-select
+          v-model="boundaryPick"
+          size="small"
+          clearable
+          placeholder="从边界加载"
+          style="width: 150px"
+          :loading="boundaryLoading"
+          @change="applyBoundaryPick"
+        >
+          <el-option
+            v-for="b in boundaryOptions"
+            :key="b.id"
+            :label="`${b.name}（${b.areaHa} ha）`"
+            :value="b.id"
+          />
+        </el-select>
         <!-- 复用上次 AOI：保证与历史记录的区域指纹一致，时序/对比才能正确匹配 -->
-        <el-button size="small" :disabled="!lastAoiAvailable" @click="reuseLastAoi">复用上次 AOI</el-button>
+        <el-button size="small" :disabled="!lastAoiAvailable" @click="reuseLastAoi">复用上次</el-button>
         <span v-if="aoiAreaText" class="aoi-info">AOI {{ aoiAreaText }}</span>
         <el-divider direction="vertical" />
         <el-button size="small" :loading="demoLoading" @click="loadDemo">一键载入演示数据</el-button>
@@ -602,37 +619,75 @@ onMounted(() => {
   // 低配机帧率不足时自动降渲染精度（Quadro K2200 等）
   autoAdjustPerformance(viewer)
   loadBoundary()
+  loadBoundaryOptions()
   applyPendingAoi()
 })
 
 /** 从「边界管理」页跳过来时，把导入的边界直接当 AOI 用（免去手圈一遍） */
+/** 把一圈经纬度设为 AOI 并把相机飞过去（pending_aoi 与边界下拉共用） */
+function setAoiAndFly(ring: number[][], tip: string) {
+  if (!Array.isArray(ring) || ring.length < 3) return
+  // 闭合环末点与首点重复，内部逻辑按"顶点列表"处理，去掉重复点
+  const pts = ring.filter((p, i) => i === 0 || p[0] !== ring[0][0] || p[1] !== ring[0][1])
+  aoi.value = pts
+  refreshAoi()
+  const lngs = pts.map((p) => p[0])
+  const lats = pts.map((p) => p[1])
+  const cx = (Math.min(...lngs) + Math.max(...lngs)) / 2
+  const cy = (Math.min(...lats) + Math.max(...lats)) / 2
+  const span = Math.max(Math.max(...lngs) - Math.min(...lngs), Math.max(...lats) - Math.min(...lats))
+  // 用纬度跨度粗算观察高度：1° 纬度 ≈ 111km，取 1.6 倍留边
+  const height = Math.max(1200, span * 111000 * 1.6)
+  viewer?.camera.flyTo({
+    destination: Cartesian3.fromDegrees(cx, cy, height),
+    orientation: { heading: 0, pitch: CesiumMath.toRadians(-60) },
+    duration: 1.2
+  })
+  ElMessage.success(tip)
+}
+
 function applyPendingAoi() {
-  let raw: string | null = null
   try {
-    raw = localStorage.getItem('pending_aoi')
+    const raw = localStorage.getItem('pending_aoi')
     if (!raw) return
     localStorage.removeItem('pending_aoi')
-    const ring = JSON.parse(raw) as number[][]
-    if (!Array.isArray(ring) || ring.length < 3) return
-    // 闭合环末点与首点重复，内部逻辑按"顶点列表"处理，去掉重复点
-    const pts = ring.filter((p, i) => i === 0 || p[0] !== ring[0][0] || p[1] !== ring[0][1])
-    aoi.value = pts
-    refreshAoi()
-    const lngs = pts.map((p) => p[0])
-    const lats = pts.map((p) => p[1])
-    const cx = (Math.min(...lngs) + Math.max(...lngs)) / 2
-    const cy = (Math.min(...lats) + Math.max(...lats)) / 2
-    const span = Math.max(Math.max(...lngs) - Math.min(...lngs), Math.max(...lats) - Math.min(...lats))
-    // 用纬度跨度粗算观察高度：1° 纬度 ≈ 111km，取 1.6 倍留边
-    const height = Math.max(1200, span * 111000 * 1.6)
-    viewer?.camera.flyTo({
-      destination: Cartesian3.fromDegrees(cx, cy, height),
-      orientation: { heading: 0, pitch: CesiumMath.toRadians(-60) },
-      duration: 1.2
-    })
-    ElMessage.success('已载入导入的边界作为 AOI，可直接查询影像并提取')
+    setAoiAndFly(JSON.parse(raw) as number[][], '已载入导入的边界作为 AOI，可直接查询影像并提取')
   } catch {
     /* 本地存储异常不影响主流程 */
+  }
+}
+
+// ---- 边界下拉 ----
+const boundaryOptions = ref<Array<{ id: number; name: string; areaHa: number }>>([])
+const boundaryPick = ref<number | null>(null)
+const boundaryLoading = ref(false)
+
+async function loadBoundaryOptions() {
+  const pid = projectStore.currentId
+  if (!pid) return
+  boundaryLoading.value = true
+  try {
+    const rows = await boundaryApi.list(pid)
+    boundaryOptions.value = rows.map((r) => ({ id: r.id, name: r.name, areaHa: r.areaHa }))
+  } catch {
+    boundaryOptions.value = []
+  } finally {
+    boundaryLoading.value = false
+  }
+}
+
+async function applyBoundaryPick(id: number | null) {
+  if (!id) return
+  try {
+    const detail = await boundaryApi.get(id)
+    const outer = detail.geometry?.outer
+    if (!outer || outer.length < 3) {
+      ElMessage.warning('该边界没有有效外环，无法作为 AOI')
+      return
+    }
+    setAoiAndFly(outer, `已加载边界「${detail.name}」作为 AOI（${detail.areaHa} ha）`)
+  } catch {
+    ElMessage.error('边界加载失败')
   }
 }
 
