@@ -66,19 +66,35 @@ public class ImageryController {
      */
     @PostMapping("/upload")
     public ApiResponse<Imagery> upload(
-            @RequestParam("file") MultipartFile file,
+            @RequestParam(value = "file", required = false) MultipartFile file,
             @RequestParam Long projectId,
             @RequestParam(required = false) String name,
-            @RequestParam String crs,
-            @RequestParam LocalDate acquisitionDate,
+            // 下面几项都可以不传：不传就按影像自带的 CRS/范围/分辨率/日期自动识别
+            @RequestParam(required = false) String crs,
+            @RequestParam(required = false) LocalDate acquisitionDate,
             @RequestParam(required = false) Double resolutionM,
-            @RequestParam List<Double> bounds,
+            @RequestParam(required = false) List<Double> bounds,
+            // probe 阶段已存的临时文件路径，避免同一份影像重复上传
+            @RequestParam(required = false) String existingPath,
             Authentication auth) {
         guard.require(auth, "action:imagery-manage");
         // 只能往自己可见的项目里传影像
         guard.requireAccess(projectId, auth.getName(), isAdmin(auth));
         return ApiResponse.ok(service.upload(file, projectId, name, crs,
-                acquisitionDate, resolutionM, bounds));
+                acquisitionDate, resolutionM, bounds, existingPath));
+    }
+
+    /**
+     * 影像元数据自动识别：选完文件先调它，把坐标系/范围/分辨率/日期填好
+     *
+     * GeoTIFF 自带这些信息，让用户手画范围、手填坐标系既慢又容易错位。
+     * 返回里的 storedPath 会随后的 upload 复用，不需要再传一次大文件。
+     */
+    @PostMapping("/probe")
+    public ApiResponse<Map<String, Object>> probe(@RequestParam("file") MultipartFile file,
+                                                  Authentication auth) {
+        guard.require(auth, "action:imagery-manage");
+        return ApiResponse.ok(service.probe(file));
     }
 
     /**
@@ -132,6 +148,16 @@ public class ImageryController {
         service.get(id, auth.getName(), isAdmin(auth));
         service.delete(id);
         return ApiResponse.ok(null);
+    }
+
+    /**
+     * 影像预览图（贴地图用）：由后端渲染降采样 PNG，浏览器不支持直接显示 GeoTIFF
+     */
+    @GetMapping("/{id}/preview")
+    public ApiResponse<Map<String, Object>> preview(@PathVariable long id, Authentication auth) {
+        Imagery img = service.get(id, auth.getName(), isAdmin(auth));
+        Map<String, Object> meta = service.previewOf(img);
+        return ApiResponse.ok(meta);
     }
 
     /** 更新影像档案元数据（离轴角/太阳角/正射等级/授权范围/供应商/价格等 12 项） */

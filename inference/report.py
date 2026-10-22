@@ -12,6 +12,8 @@ from __future__ import annotations
 import io
 from datetime import datetime
 
+import json
+
 from docx import Document
 from docx.shared import Pt, RGBColor
 from docx.enum.text import WD_ALIGN_PARAGRAPH
@@ -134,6 +136,10 @@ def generate_report(data: dict) -> bytes:
     _add_kv(doc, "在线设备数", str(data.get("sensorOnline", 0)))
     _add_kv(doc, "未处理告警数", str(data.get("sensorAlarm", 0)))
 
+    _add_extraction_appendix(doc, data.get("extractions") or [])
+
+    _add_extraction_appendix(doc, data.get("extractions") or [])
+
     # ---- 八、结论与口径说明 ----
     _add_heading(doc, "八、结论与口径说明", level=1)
     doc.add_paragraph("本报告输出为「潜在水土流失风险筛查」，非实测侵蚀量。")
@@ -148,6 +154,122 @@ def generate_report(data: dict) -> bytes:
     buf = io.BytesIO()
     doc.save(buf)
     return buf.getvalue()
+
+
+METHOD_LABEL = {"INDEX": "指数阈值法", "SUPERVISED": "监督分类", "FUSION": "分类融合"}
+CLASS_LABEL = {
+    "PIT": "露天采坑", "DUMP": "排土场", "TAILINGS": "尾矿设施", "BARE": "裸地扰动",
+    "ROAD": "道路设施", "VEGETATION": "植被", "WATER": "水体",
+    "BUILDING": "建筑", "MOUNTAIN": "山体",
+}
+
+
+def _add_extraction_appendix(doc: Document, extractions: list[dict]) -> None:
+    """附录：解译成果明细 + 分类精度
+
+    为什么单独做附录：正文的时序/构成是聚合口径，客户核对时想看"每条记录什么时候、
+    什么方法、多少面积"，这些明细放正文会淹没结论，放附录正好。
+    """
+    _add_heading(doc, "九、附录：遥感解译成果明细", level=1)
+    if not extractions:
+        doc.add_paragraph("当前项目暂无解译记录。")
+        return
+
+    doc.add_paragraph(f"共 {len(extractions)} 条解译记录（按下表逐条列示，便于复核）。")
+    table = doc.add_table(rows=1, cols=6)
+    table.style = "Light Grid Accent 1"
+    hdr = table.rows[0].cells
+    for i, t in enumerate(["影像日期", "地物类型", "解译方法", "面积(km²)", "覆盖率", "数据源"]):
+        hdr[i].text = t
+    for e in extractions[:120]:
+        cells = table.add_row().cells
+        cells[0].text = str(e.get("acquisitionDate") or "-")
+        cells[1].text = CLASS_LABEL.get(str(e.get("classType")), str(e.get("classType") or "-"))
+        cells[2].text = METHOD_LABEL.get(str(e.get("method") or "INDEX"), str(e.get("method") or "INDEX"))
+        cells[3].text = f"{(e.get('extractAreaHa') or 0) / 100:.2f}"
+        cells[4].text = f"{e.get('coveragePct') or 0:.1f}%"
+        cells[5].text = str(e.get("satellite") or "-")
+    if len(extractions) > 120:
+        doc.add_paragraph(f"（仅列示前 120 条，其余 {len(extractions) - 120} 条见系统记录）")
+
+    # 分类精度：取最近一条带 accuracyJson 的监督分类记录
+    acc = None
+    for e in extractions:
+        raw = e.get("accuracyJson")
+        if e.get("method") == "SUPERVISED" and raw:
+            try:
+                acc = json.loads(raw)
+                break
+            except Exception:  # noqa: BLE001
+                continue
+    if acc:
+        _add_heading(doc, "9.1 监督分类精度", level=2)
+        _add_kv(doc, "总体精度 OA", f"{acc.get('overallAccuracy', '-')}%")
+        _add_kv(doc, "Kappa 系数", str(acc.get("kappa", "-")))
+        _add_kv(doc, "样本/验证", f"{acc.get('sampleCount', '-')} / {acc.get('split', '-')}")
+        _add_note(doc, "精度指标只对本次分析的影像与 AOI 有效，不代表其它矿区或其它时相。")
+
+    _add_note(doc,
+              "上表面积均为「潜在水土流失/扰动风险筛查」口径的影像解译结果，"
+              "不是实测侵蚀量，也不构成储量或品位数据。")
+
+
+METHOD_LABEL = {"INDEX": "指数阈值法", "SUPERVISED": "监督分类", "FUSION": "分类融合"}
+CLASS_LABEL = {
+    "PIT": "露天采坑", "DUMP": "排土场", "TAILINGS": "尾矿设施", "BARE": "裸地扰动",
+    "ROAD": "道路设施", "VEGETATION": "植被", "WATER": "水体",
+    "BUILDING": "建筑", "MOUNTAIN": "山体",
+}
+
+
+def _add_extraction_appendix(doc: Document, extractions: list[dict]) -> None:
+    """附录：解译成果明细 + 分类精度
+
+    为什么单独做附录：正文的时序/构成是聚合口径，客户核对时想看"每条记录什么时候、
+    什么方法、多少面积"，这些明细放正文会淹没结论，放附录正好。
+    """
+    _add_heading(doc, "九、附录：遥感解译成果明细", level=1)
+    if not extractions:
+        doc.add_paragraph("当前项目暂无解译记录。")
+        return
+
+    doc.add_paragraph(f"共 {len(extractions)} 条解译记录（按下表逐条列示，便于复核）。")
+    table = doc.add_table(rows=1, cols=6)
+    table.style = "Light Grid Accent 1"
+    hdr = table.rows[0].cells
+    for i, t in enumerate(["影像日期", "地物类型", "解译方法", "面积(km²)", "覆盖率", "数据源"]):
+        hdr[i].text = t
+    for e in extractions[:120]:
+        cells = table.add_row().cells
+        cells[0].text = str(e.get("acquisitionDate") or "-")
+        cells[1].text = CLASS_LABEL.get(str(e.get("classType")), str(e.get("classType") or "-"))
+        cells[2].text = METHOD_LABEL.get(str(e.get("method") or "INDEX"), str(e.get("method") or "INDEX"))
+        cells[3].text = f"{(e.get('extractAreaHa') or 0) / 100:.2f}"
+        cells[4].text = f"{e.get('coveragePct') or 0:.1f}%"
+        cells[5].text = str(e.get("satellite") or "-")
+    if len(extractions) > 120:
+        doc.add_paragraph(f"（仅列示前 120 条，其余 {len(extractions) - 120} 条见系统记录）")
+
+    # 分类精度：取最近一条带 accuracyJson 的监督分类记录
+    acc = None
+    for e in extractions:
+        raw = e.get("accuracyJson")
+        if e.get("method") == "SUPERVISED" and raw:
+            try:
+                acc = json.loads(raw)
+                break
+            except Exception:  # noqa: BLE001
+                continue
+    if acc:
+        _add_heading(doc, "9.1 监督分类精度", level=2)
+        _add_kv(doc, "总体精度 OA", f"{acc.get('overallAccuracy', '-')}%")
+        _add_kv(doc, "Kappa 系数", str(acc.get("kappa", "-")))
+        _add_kv(doc, "样本/验证", f"{acc.get('sampleCount', '-')} / {acc.get('split', '-')}")
+        _add_note(doc, "精度指标只对本次分析的影像与 AOI 有效，不代表其它矿区或其它时相。")
+
+    _add_note(doc,
+              "上表面积均为「潜在水土流失/扰动风险筛查」口径的影像解译结果，"
+              "不是实测侵蚀量，也不构成储量或品位数据。")
 
 
 def _add_rsei_section(doc: Document, rsei: dict) -> None:

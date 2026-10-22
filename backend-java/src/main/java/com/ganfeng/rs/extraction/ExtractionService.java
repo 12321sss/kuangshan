@@ -245,7 +245,8 @@ public class ExtractionService {
     public Extraction save(Long projectId, String name, String classType,
                            List<List<List<Double>>> features, String aoiJson,
                            double coveragePct, double aoiAreaHa, String acquisitionDate,
-                           String satellite, String createdBy) {
+                           String satellite, String createdBy,
+                           String method, String accuracyJson) {
         if (aoiJson == null || aoiJson.isBlank()) {
             throw BizException.badRequest("AOI 不能为空");
         }
@@ -276,6 +277,8 @@ public class ExtractionService {
         e.setAoiAreaHa(round2(aoiAreaHa));
         e.setExtractAreaHa(round2(extractHa));
         e.setCoveragePct(round2(coveragePct));
+        e.setMethod(method);
+        e.setAccuracyJson(accuracyJson);
         e.setCreatedBy(createdBy);
         e.setCreatedAt(LocalDateTime.now());
         return repo.save(e);

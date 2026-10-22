@@ -50,8 +50,16 @@ public class ExtractionController {
 
     @GetMapping
     public ApiResponse<List<Extraction>> list(@RequestParam(required = false) Long projectId,
+                                              @RequestParam(required = false) String method,
                                               Authentication auth) {
-        return ApiResponse.ok(service.list(projectId, auth.getName(), isAdmin(auth)));
+        List<Extraction> all = service.list(projectId, auth.getName(), isAdmin(auth));
+        // method 过滤：叠加分析要区分「监督分类结果」与「指数提取结果」
+        if (method != null && !method.isBlank()) {
+            all = all.stream()
+                    .filter(e -> method.equalsIgnoreCase(e.getMethod() == null ? "INDEX" : e.getMethod()))
+                    .toList();
+        }
+        return ApiResponse.ok(all);
     }
 
     @GetMapping("/{id}")
@@ -106,7 +114,10 @@ public class ExtractionController {
             double coveragePct,
             double aoiAreaHa,
             String acquisitionDate,
-            String satellite
+            String satellite,
+            /* INDEX 指数阈值（默认）/ SUPERVISED 监督分类 / FUSION 融合 */
+            String method,
+            String accuracyJson
     ) {}
 
     /** 直接保存解译结果（进 extractions 表，供时序/分析/权限使用） */
@@ -117,7 +128,8 @@ public class ExtractionController {
         guard.requireAccess(req.projectId(), auth.getName(), isAdmin(auth));
         Extraction e = service.save(req.projectId(), req.name(), req.classType(),
                 req.features(), req.aoiJson(), req.coveragePct(), req.aoiAreaHa(),
-                req.acquisitionDate(), req.satellite(), auth.getName());
+                req.acquisitionDate(), req.satellite(), auth.getName(),
+                req.method(), req.accuracyJson());
         // 审计：保存解译结果（含地物类型与覆盖率，便于回溯）
         auditLogService.record(auth.getName(), "EXTRACT_SAVE", "EXTRACTION", String.valueOf(e.getId()),
                 String.format("保存解译结果「%s」类型=%s 覆盖率=%.2f%%",

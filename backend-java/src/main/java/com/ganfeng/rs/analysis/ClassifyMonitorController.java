@@ -4,6 +4,8 @@ import com.ganfeng.rs.boundary.AoiBoundaryController;
 import com.ganfeng.rs.common.ApiResponse;
 import com.ganfeng.rs.common.BizException;
 import com.ganfeng.rs.common.PermissionGuard;
+import com.ganfeng.rs.imagery.Imagery;
+import com.ganfeng.rs.imagery.ImageryService;
 import com.ganfeng.rs.project.Project;
 import com.ganfeng.rs.project.ProjectService;
 import org.springframework.beans.factory.annotation.Value;
@@ -35,6 +37,7 @@ public class ClassifyMonitorController {
     private final ProjectService projectService;
     private final PermissionGuard guard;
     private final AoiBoundaryController boundaryController;
+    private final ImageryService imageryService;
     private final RestTemplate rest;
 
     @Value("${INFERENCE_BASE_URL:http://localhost:8010}")
@@ -43,10 +46,12 @@ public class ClassifyMonitorController {
     public ClassifyMonitorController(ProjectService projectService,
                                      PermissionGuard guard,
                                      AoiBoundaryController boundaryController,
+                                     ImageryService imageryService,
                                      RestTemplateBuilder builder) {
         this.projectService = projectService;
         this.guard = guard;
         this.boundaryController = boundaryController;
+        this.imageryService = imageryService;
         // 首次跑监督分类/突变检测要下载影像瓦片，单景 4 波段可能 1-4 分钟
         this.rest = builder
                 .setConnectTimeout(Duration.ofSeconds(10))
@@ -139,6 +144,58 @@ public class ClassifyMonitorController {
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("available", true);
         out.put("projectName", projectService.get(req.projectId()).getName());
+        out.putAll(data);
+        return ApiResponse.ok(out);
+    }
+
+    public record ClassifyLocalReq(Long projectId, Long imageryId, List<List<Double>> aoi,
+                                   List<SamplePoint> samples, Integer maxDim, Integer minSamples) {}
+
+    /**
+     * 本地高分影像监督分类（4 波段、0.5m 级）
+     *
+     * 与在线版的区别：在线走 Sentinel-2 的 6 波段（含短波红外），这里只有 4 波段，
+     * 但分辨率高 20 倍——采坑边界、道路这类地物能分得干净得多。
+     */
+    @PostMapping("/classify-local")
+    public ApiResponse<Map<String, Object>> classifyLocal(@RequestBody ClassifyLocalReq req,
+                                                          Authentication auth) {
+        if (req.projectId() == null || req.imageryId() == null) {
+            throw new BizException(400, "请选择本地影像");
+        }
+        guard.requireAccess(req.projectId(), auth);
+        Imagery img = imageryService.get(req.imageryId());
+        if (!req.projectId().equals(img.getProjectId())) {
+            throw new BizException(403, "该影像不属于当前项目");
+        }
+        String path = imageryService.resolvePath(img);
+        if (req.samples() == null || req.samples().isEmpty()) {
+            throw new BizException(400, "还没有样本点：请先在图上一类一类地点选样本");
+        }
+
+        // 整幅模式不传 AOI：让 Python 直接按整幅读，避免像素坐标换算带来的边界误差
+        List<List<Double>> aoi = req.aoi() == null ? List.of() : req.aoi();
+
+        List<Map<String, Object>> samples = new ArrayList<>();
+        for (SamplePoint sp : req.samples()) {
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("classType", sp.classType());
+            m.put("lng", sp.lng());
+            m.put("lat", sp.lat());
+            samples.add(m);
+        }
+
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("path", path);
+        payload.put("aoi", aoi);
+        payload.put("samples", samples);
+        payload.put("maxDim", req.maxDim() == null ? 1600 : req.maxDim());
+        payload.put("minSamples", req.minSamples() == null ? 8 : req.minSamples());
+
+        Map<String, Object> data = post("/api/v1/classify/local", payload, "本地影像分类");
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("available", true);
+        out.put("imageryName", img.getName());
         out.putAll(data);
         return ApiResponse.ok(out);
     }

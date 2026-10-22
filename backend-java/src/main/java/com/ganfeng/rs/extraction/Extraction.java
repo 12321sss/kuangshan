@@ -74,6 +74,20 @@ public class Extraction {
     @Column(nullable = false)
     private Double coveragePct;
 
+    /**
+     * 解译方法：INDEX 指数阈值法 / SUPERVISED 监督分类 / FUSION 融合结果
+     *
+     * 为什么必须记：叠加分析要按方法筛数据（分类结果 ↔ 指数结果），
+     * 只靠名称里有没有"监督分类"来猜太脆弱。
+     */
+    @Column(length = 16)
+    private String method = "INDEX";
+
+    /** 精度或融合元信息（JSON）：监督分类存 OA/Kappa/混淆矩阵；融合存策略与参与记录 */
+    @Lob
+    @Column(columnDefinition = "TEXT")
+    private String accuracyJson;
+
     @Column(length = 64)
     private String createdBy;
 
@@ -111,6 +125,10 @@ public class Extraction {
     public Double getAoiAreaHa() { return aoiAreaHa; }
     public Double getExtractAreaHa() { return extractAreaHa; }
     public Double getCoveragePct() { return coveragePct; }
+    public String getMethod() { return method; }
+    public void setMethod(String v) { this.method = (v == null || v.isBlank()) ? "INDEX" : v; }
+    public String getAccuracyJson() { return accuracyJson; }
+    public void setAccuracyJson(String v) { this.accuracyJson = v; }
     public String getCreatedBy() { return createdBy; }
     public LocalDateTime getCreatedAt() { return createdAt; }
     public Boolean getDeleted() { return deleted; }

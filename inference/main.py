@@ -1069,6 +1069,38 @@ def classify_supervised(req: ClassifyRequest):
     return {"code": 0, "message": "success", "data": data}
 
 
+class ClassifyLocalRequest(BaseModel):
+    model_config = {"populate_by_name": True}
+
+    path: str = Field(..., description="本地影像绝对路径")
+    aoi: list[list[float]] = Field(default_factory=list, description="为空则用整幅影像")
+    samples: list[SamplePoint] = Field(default_factory=list)
+    maxDim: int = Field(1600)
+    minSamples: int = Field(8)
+    minAreaPx: int = Field(30)
+
+
+@app.post("/api/v1/classify/local")
+def classify_local_api(req: ClassifyLocalRequest):
+    """本地高分影像监督分类（4 波段：蓝/绿/红/近红外，7 维特征）"""
+    import supervised_local as local_mod
+
+    try:
+        data = local_mod.classify_local({
+            "path": req.path,
+            "aoi": req.aoi,
+            "samples": [s.model_dump() for s in req.samples],
+            "maxDim": max(256, min(req.maxDim, 4096)),
+            "minSamples": max(3, req.minSamples),
+            "minAreaPx": max(1, req.minAreaPx),
+        })
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail=f"本地影像分类失败: {e}") from e
+    return {"code": 0, "message": "success", "data": data}
+
+
 # ---------------------------------------------------------------------------
 # 周尺度监测：影像可用性（L1）+ 突变事件检测（L2）
 # ---------------------------------------------------------------------------
@@ -1235,6 +1267,95 @@ def aoi_import(req: AoiImportRequest):
     except Exception as e:  # noqa: BLE001
         raise HTTPException(status_code=500, detail=f"边界解析失败: {e}") from e
 
+    return {"code": 0, "message": "success", "data": data}
+
+
+# ---------------------------------------------------------------------------
+# 影像元数据自动识别（GeoTIFF 自带 CRS/范围/分辨率/日期）
+# ---------------------------------------------------------------------------
+import imagery_probe  # noqa: E402
+
+
+class ImageryInspectRequest(BaseModel):
+    path: str = Field(..., description="服务器本地影像绝对路径")
+
+
+@app.get("/api/v1/imagery/inspect")
+def imagery_inspect_get(path: str = Query(..., description="服务器本地影像绝对路径")):
+    """GET 版本：避免 Windows 路径反斜杠在 JSON 里来回转义"""
+    return _imagery_inspect_impl(path)
+
+
+@app.post("/api/v1/imagery/inspect")
+def imagery_inspect(req: ImageryInspectRequest):
+    """读影像自带的坐标系、范围、分辨率、波段数与日期（文件名兜底）"""
+    return _imagery_inspect_impl(req.path)
+
+
+def _imagery_inspect_impl(path: str):
+    try:
+        data = imagery_probe.inspect(path)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail=f"影像识别失败: {e}") from e
+    return {"code": 0, "message": "success", "data": data}
+
+
+# ---------------------------------------------------------------------------
+# 分类结果 × 指数结果 叠加分析（融合，docs/18）
+# ---------------------------------------------------------------------------
+import fusion as fusion_mod  # noqa: E402
+
+
+class FusionPair(BaseModel):
+    classType: str
+    strategy: str = Field("INDICES_FIRST", description="INDICES_FIRST/INTERSECT_ONLY/UNION_ADD")
+
+
+class FusionRequest(BaseModel):
+    classified: dict[str, list[dict]] = Field(default_factory=dict, description="分类结果 {类型:[Feature]}")
+    indices: dict[str, list[dict]] = Field(default_factory=dict, description="指数结果 {类型:[Feature]}")
+    pairs: list[FusionPair] = Field(default_factory=list)
+    options: dict = Field(default_factory=dict)
+    withImage: bool = Field(True, alias="withImage")
+
+
+@app.post("/api/v1/fusion/compare")
+def fusion_compare(req: FusionRequest):
+    """L2 差异分析：交集/仅分类/仅指数 + IoU + 待核查斑块
+
+    口径：IoU 为方法间一致性，不是精度；不一致区域只能建议核查。
+    """
+    try:
+        data = fusion_mod.compare({
+            "classified": req.classified,
+            "indices": req.indices,
+            "pairs": [p.model_dump() for p in req.pairs],
+            "options": req.options or {},
+            "withImage": req.withImage,
+        })
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail=f"叠加分析失败: {e}") from e
+    return {"code": 0, "message": "success", "data": data}
+
+
+@app.post("/api/v1/fusion/merge")
+def fusion_merge(req: FusionRequest):
+    """L3 融合：按类策略（指数优先/仅一致/指数补充）生成最终结果"""
+    try:
+        data = fusion_mod.merge({
+            "classified": req.classified,
+            "indices": req.indices,
+            "pairs": [p.model_dump() for p in req.pairs],
+            "withImage": req.withImage,
+        })
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail=f"融合失败: {e}") from e
     return {"code": 0, "message": "success", "data": data}
 
 

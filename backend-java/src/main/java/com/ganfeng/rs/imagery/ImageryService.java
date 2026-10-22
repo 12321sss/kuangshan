@@ -20,6 +20,7 @@ import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Map;
 import java.util.Locale;
 import java.util.Set;
 
@@ -59,6 +60,10 @@ public class ImageryService {
     public record CoordinateSystem(String code, String name, String label) {}
 
     private final ImageryRepository repo;
+
+    /** inference 地址：影像元数据自动识别走它（rasterio 在 Python 侧） */
+    @org.springframework.beans.factory.annotation.Value("${INFERENCE_BASE_URL:http://localhost:8010}")
+    private String inferenceBaseUrl;
     private final ProjectService projectService;
 
     public ImageryService(ImageryRepository repo, ProjectService projectService,
@@ -121,23 +126,154 @@ public class ImageryService {
      * @param resolutionM  分辨率（米/像素），为空按 0.8（高分默认）
      * @param bounds    覆盖范围 [west, south, east, north]（WGS84），可为空
      */
+    /**
+     * 探测影像元数据：先把文件落到 upload 目录，再让 inference 用 rasterio 读
+     *
+     * 为什么这么做：GeoTIFF 自带 CRS、范围、分辨率、波段数，用户不该手画范围、手填坐标系。
+     * 返回 storedPath 供随后的 upload 复用，避免把十几 MB 的文件再传一次。
+     */
+    public Map<String, Object> probe(MultipartFile file) {
+        if (file == null || file.isEmpty()) {
+            throw BizException.badRequest("请选择要上传的影像文件");
+        }
+        String original = file.getOriginalFilename() == null ? "imagery.tif" : file.getOriginalFilename();
+        String storedName = System.currentTimeMillis() + "_" + sanitize(original);
+        Path target = uploadRoot.resolve(storedName);
+        try (InputStream in = file.getInputStream()) {
+            Files.createDirectories(uploadRoot);
+            Files.copy(in, target, StandardCopyOption.REPLACE_EXISTING);
+        } catch (IOException e) {
+            throw BizException.badRequest("影像暂存失败: " + e.getMessage());
+        }
+
+        Map<String, Object> meta = inspectByPath(target.toString());
+        Map<String, Object> out = new java.util.LinkedHashMap<>(meta);
+        out.put("storedPath", target.toString());
+        out.put("originalName", original);
+        out.put("sizeBytes", file.getSize());
+        return out;
+    }
+
+    /** 影像预览（贴地图用）：返回 previewBase64 + WGS84 范围 */
+    public Map<String, Object> previewOf(Imagery img) {
+        String path = resolvePath(img);
+        Map<String, Object> meta = inspectByPath(path);
+        Map<String, Object> out = new java.util.LinkedHashMap<>();
+        out.put("previewBase64", meta.get("previewBase64"));
+        out.put("bounds", Map.of(
+                "west", img.getWest(), "south", img.getSouth(),
+                "east", img.getEast(), "north", img.getNorth()));
+        out.put("error", meta.get("error"));
+        return out;
+    }
+
+    /** 调 inference 读影像元数据；失败返回带 error 的空结果，不阻断上传 */
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> inspectByPath(String path) {
+        try {
+            java.net.http.HttpClient client = java.net.http.HttpClient.newBuilder()
+                    .connectTimeout(java.time.Duration.ofSeconds(5)).build();
+            // 用 GET + URL 编码传路径：Windows 反斜杠在 JSON 里容易转义出错
+            String q = java.net.URLEncoder.encode(path, java.nio.charset.StandardCharsets.UTF_8);
+            java.net.http.HttpRequest req = java.net.http.HttpRequest
+                    .newBuilder(java.net.URI.create(inferenceBaseUrl + "/api/v1/imagery/inspect?path=" + q))
+                    .timeout(java.time.Duration.ofSeconds(60))
+                    .GET()
+                    .build();
+            var resp = client.send(req, java.net.http.HttpResponse.BodyHandlers.ofString());
+            if (resp.statusCode() / 100 != 2) {
+                return Map.of("error", "识别失败：HTTP " + resp.statusCode());
+            }
+            var mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+            var node = mapper.readTree(resp.body());
+            if (node.path("code").asInt(-1) != 0) {
+                return Map.of("error", node.path("message").asText("识别失败"));
+            }
+            return mapper.convertValue(node.get("data"), Map.class);
+        } catch (Exception e) {
+            return Map.of("error", "识别服务不可用：" + e.getMessage());
+        }
+    }
+
     @Transactional
     public Imagery upload(MultipartFile file, Long projectId, String name, String crs,
-                          LocalDate acquisitionDate, Double resolutionM, List<Double> bounds) {
-        if (file == null || file.isEmpty()) {
+                          LocalDate acquisitionDate, Double resolutionM, List<Double> bounds,
+                          String existingPath) {
+        if ((file == null || file.isEmpty()) && (existingPath == null || existingPath.isBlank())) {
             throw BizException.badRequest("请选择要上传的影像文件");
         }
         if (!SOURCES.contains("UPLOAD")) {
             throw BizException.badRequest("非法来源");
         }
+
+        // ---- 1. 先落盘：要么复用 probe 阶段的暂存文件，要么现在复制 ----
+        String original = file == null || file.getOriginalFilename() == null
+                ? "imagery.tif" : file.getOriginalFilename();
+        Path target;
+        if (existingPath != null && !existingPath.isBlank()) {
+            // 复用 probe 阶段已存的文件：避免同一份十几 MB 影像传两次
+            Path p = Paths.get(existingPath).normalize();
+            if (!p.startsWith(uploadRoot.normalize())) {
+                throw BizException.badRequest("文件路径不在上传目录内，拒绝使用");
+            }
+            if (!Files.exists(p)) {
+                throw BizException.badRequest("暂存文件已不存在，请重新选择影像");
+            }
+            target = p;
+        } else {
+            String storedName = System.currentTimeMillis() + "_" + sanitize(original);
+            target = uploadRoot.resolve(storedName);
+            try (InputStream in = file.getInputStream()) {
+                Files.createDirectories(uploadRoot);
+                Files.copy(in, target, StandardCopyOption.REPLACE_EXISTING);
+            } catch (IOException e) {
+                throw BizException.badRequest("影像文件保存失败: " + e.getMessage());
+            }
+        }
+
+        // ---- 2. 缺字段就自动识别（GeoTIFF 自带 CRS/范围/分辨率/日期）----
+        if (crs == null || crs.isBlank() || acquisitionDate == null
+                || bounds == null || bounds.size() != 4 || resolutionM == null) {
+            Map<String, Object> meta = inspectByPath(target.toString());
+            if (meta.get("error") == null) {
+                if (crs == null || crs.isBlank()) {
+                    Object c = meta.get("crs");
+                    if (c != null) crs = String.valueOf(c);
+                }
+                if (bounds == null || bounds.size() != 4) {
+                    Object b = meta.get("bounds");
+                    if (b instanceof Map<?, ?> bm) {
+                        bounds = java.util.List.of(
+                                ((Number) bm.get("west")).doubleValue(),
+                                ((Number) bm.get("south")).doubleValue(),
+                                ((Number) bm.get("east")).doubleValue(),
+                                ((Number) bm.get("north")).doubleValue());
+                    }
+                }
+                if (acquisitionDate == null && meta.get("acquisitionDate") != null) {
+                    try {
+                        acquisitionDate = LocalDate.parse(
+                                String.valueOf(meta.get("acquisitionDate")).substring(0, 10));
+                    } catch (Exception ignored) {
+                        // 识别到的日期格式异常就保持为空，由下面的校验提示
+                    }
+                }
+                if (resolutionM == null && meta.get("resolutionM") instanceof Number n) {
+                    resolutionM = n.doubleValue();
+                }
+            }
+        }
+
+        // ---- 3. 校验（识别失败时才需要用户手动补）----
         if (crs == null || crs.isBlank()) {
-            throw BizException.badRequest("请选择影像坐标系");
+            throw BizException.badRequest(
+                    "影像未定义坐标系，且自动识别失败：请手动指定（如 EPSG:4326 / EPSG:32650）");
         }
         if (acquisitionDate == null) {
-            throw BizException.badRequest("请填写影像拍摄日期");
+            throw BizException.badRequest("缺少拍摄日期，且未能从影像或文件名识别：请手动填写");
         }
         if (bounds == null || bounds.size() != 4) {
-            throw BizException.badRequest("请在地图上绘制影像覆盖范围（4 个角点）");
+            throw BizException.badRequest("影像缺少有效范围，且自动识别失败：请手动绘制覆盖范围");
         }
         double west = bounds.get(0), south = bounds.get(1);
         double east = bounds.get(2), north = bounds.get(3);
@@ -146,15 +282,6 @@ public class ImageryService {
         }
         if (south < -90 || north > 90 || west < -180 || east > 180) {
             throw BizException.badRequest("覆盖范围需在合法经纬度内（-180~180 / -90~90）");
-        }
-
-        String original = file.getOriginalFilename() == null ? "imagery.tif" : file.getOriginalFilename();
-        String storedName = System.currentTimeMillis() + "_" + sanitize(original);
-        Path target = uploadRoot.resolve(storedName);
-        try (InputStream in = file.getInputStream()) {
-            Files.copy(in, target, StandardCopyOption.REPLACE_EXISTING);
-        } catch (IOException e) {
-            throw BizException.badRequest("影像文件保存失败: " + e.getMessage());
         }
 
         Imagery img = new Imagery();
