@@ -47,7 +47,17 @@ public class AuthController {
     @PostMapping("/refresh")
     public ResponseEntity<ApiResponse<AuthDtos.TokenResponse>> refresh(
             @CookieValue(name = REFRESH_COOKIE, required = false) String refreshToken) {
-        return tokenResponse(authService.refresh(refreshToken));
+        try {
+            return tokenResponse(authService.refresh(refreshToken));
+        } catch (Exception e) {
+            // 刷新失败（令牌缺失/过期/被撤销）：必须同时清掉会话标记 rs_session。
+            // 否则前端每次页面加载都会看到标记还在，于是再探测一次 refresh，
+            // 控制台就会反复出现 "api/auth/refresh 401"。清掉标记后前端直接走登录页。
+            return ResponseEntity.status(401)
+                    .header(HttpHeaders.SET_COOKIE, clearCookie(SESSION_MARKER).toString())
+                    .header(HttpHeaders.SET_COOKIE, clearCookie(REFRESH_COOKIE).toString())
+                    .body(ApiResponse.error(401, "登录已过期，请重新登录"));
+        }
     }
 
     @PostMapping("/logout")

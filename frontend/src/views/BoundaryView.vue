@@ -1,5 +1,14 @@
 <template>
   <div class="boundary-page">
+      <!-- 项目隔离提示：所有影像都归属某个项目，未选项目时不应看到任何一条 -->
+      <div v-if="!projectStore.currentId" class="no-project-tip">
+        <span>当前未选择项目。影像、边界、解译结果都按项目隔离管理，
+        请先在顶部选择项目，或到「平台管理 → 项目管理」新建一个。</span>
+        <el-button size="small" type="primary" plain @click="router.push('/platform/projects')">
+          去项目管理
+        </el-button>
+      </div>
+
     <!-- 顶部：边界用途说明 + 越界检测基准状态 -->
     <el-alert
       v-if="summary"
@@ -519,4 +528,9 @@ watch(() => projectStore.currentId, load)
 .preview-box svg { width: 100%; height: 300px; display: block; }
 .preview-empty { color: #a9aeb8; font-size: 12px; text-align: center; padding: 30px 0; }
 .preview-meta { margin-top: 12px; }
+.no-project-tip {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  background: #fff7e6; border: 1px solid #ffd591; border-radius: 8px;
+  padding: 10px 14px; font-size: 13px; color: #ad6800; margin-bottom: 12px;
+}
 </style>

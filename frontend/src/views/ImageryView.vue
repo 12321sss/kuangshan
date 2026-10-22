@@ -4,6 +4,14 @@
     <div class="map-wrap">
       <div ref="cesiumRef" class="cesium-container"></div>
 
+      <!-- 项目隔离提示：所有影像都归属某个项目，未选项目时不应看到任何一条 -->
+      <div v-if="!projectStore.currentId" class="no-project-tip">
+        <span>当前未选择项目。影像、边界、解译结果都按项目隔离管理，
+        请先在顶部选择项目，或到「平台管理 → 项目管理」新建一个。</span>
+        <el-button size="small" type="primary" plain @click="router.push('/platform/projects')">
+          去项目管理
+        </el-button>
+      </div>
       <div class="map-toolbar">
         <el-button-group>
           <el-button size="small" @click="flyToMine">定位矿区</el-button>
@@ -504,9 +512,15 @@ async function loadCrs() {
 }
 
 async function loadImagery() {
+  // 项目隔离：未选项目时不请求，避免把多个项目的影像混在一张列表里
+  // （后端在 projectId=null 时会返回当前用户可见的全部项目，不符合分项目管理的要求）
+  if (!projectStore.currentId) {
+    imagery.value = []
+    return
+  }
   try {
     imagery.value = await imageryApi.list({
-      projectId: projectStore.currentId ?? undefined,
+      projectId: projectStore.currentId,
       source: filterSource.value || undefined
     })
     redrawFootprints()
@@ -1178,5 +1192,12 @@ async function saveMeta() {
 }
 .selected-tip {
   margin-top: 10px;
+}
+.no-project-tip {
+  position: absolute; top: 12px; left: 12px; right: 12px; z-index: 20;
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  background: #fff7e6; border: 1px solid #ffd591; border-radius: 8px;
+  padding: 10px 14px; font-size: 13px; color: #ad6800;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.08);
 }
 </style>

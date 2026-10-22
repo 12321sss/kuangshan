@@ -72,27 +72,91 @@
       </div>
     </el-dialog>
 
-    <!-- 新增/编辑对话框 -->
-    <el-dialog v-model="dialogVisible" :title="editing?.id ? '编辑项目' : '新增项目'" width="480px">
-      <el-form v-if="editing" label-width="90px">
+    <!-- 新增/编辑对话框：按「基本信息 / 矿权与开采 / 对接与坐标」分组 -->
+    <el-dialog v-model="dialogVisible" :title="editing?.id ? '编辑项目' : '新建矿区项目'"
+               width="620px" top="6vh">
+      <div v-if="!editing?.id" class="proj-tip">
+        项目是所有数据的归属单元：影像、边界、解译结果、安全评估都挂在项目下，
+        只有项目成员可见。新建后会自动切换到该项目。
+      </div>
+      <el-form v-if="editing" label-width="96px" size="default">
+        <!-- ---------- 基本信息 ---------- -->
+        <div class="form-block-title">基本信息</div>
         <el-form-item label="项目名称" required>
-          <el-input v-model="editing.name" />
+          <el-input v-model="editing.name" placeholder="如：宁都河源锂矿遥感监测" />
         </el-form-item>
-        <el-form-item label="区域">
+        <el-form-item label="所在区域">
           <el-input v-model="editing.region" placeholder="如：江西省赣州市宁都县" />
         </el-form-item>
-        <el-form-item label="状态">
+        <el-form-item label="项目状态">
           <el-select v-model="editing.status" style="width: 100%">
             <el-option value="RUNNING" label="进行中" />
             <el-option value="PLANNING" label="规划中" />
             <el-option value="ARCHIVED" label="已归档" />
           </el-select>
         </el-form-item>
-        <el-form-item label="负责人">
-          <el-input v-model="editing.manager" />
+
+        <!-- ---------- 矿权与开采 ---------- -->
+        <div class="form-block-title">矿权与开采</div>
+        <el-form-item label="矿种">
+          <el-select v-model="editing.mineralType" style="width: 100%" filterable allow-create
+                     placeholder="选择或输入矿种">
+            <el-option value="锂矿" label="锂矿" />
+            <el-option value="铁矿" label="铁矿" />
+            <el-option value="铜矿" label="铜矿" />
+            <el-option value="石灰岩" label="石灰岩" />
+            <el-option value="煤矿" label="煤矿" />
+          </el-select>
         </el-form-item>
-        <el-form-item label="说明">
-          <el-input v-model="editing.description" type="textarea" :rows="3" />
+        <el-form-item label="采矿许可证">
+          <el-input v-model="editing.licenseNo" placeholder="许可证号，报告合规章节会引用" />
+        </el-form-item>
+        <el-form-item label="矿权面积">
+          <el-input-number v-model="editing.licenseAreaKm2" :min="0" :precision="2" :step="0.1"
+                           style="width: 180px" />
+          <span class="unit">km²（越界分析的对比基准）</span>
+        </el-form-item>
+        <el-form-item label="开采方式">
+          <el-radio-group v-model="editing.miningMethod">
+            <el-radio-button value="露天">露天</el-radio-button>
+            <el-radio-button value="井下">井下</el-radio-button>
+            <el-radio-button value="联合">联合</el-radio-button>
+          </el-radio-group>
+        </el-form-item>
+
+        <!-- ---------- 对接与坐标 ---------- -->
+        <div class="form-block-title">对接与坐标</div>
+        <el-form-item label="内部负责人">
+          <el-input v-model="editing.manager" placeholder="我方项目经理" />
+        </el-form-item>
+        <el-form-item label="客户对接人">
+          <el-input v-model="editing.contactPerson" placeholder="客户方联系人" />
+        </el-form-item>
+        <el-form-item label="联系方式">
+          <el-input v-model="editing.contactPhone" placeholder="电话 / 邮箱" />
+        </el-form-item>
+        <el-form-item label="矿区中心点">
+          <div class="coord-row">
+            <el-input-number v-model="editing.centerLng" :precision="6" :controls="false"
+                             placeholder="经度" style="width: 140px" />
+            <el-input-number v-model="editing.centerLat" :precision="6" :controls="false"
+                             placeholder="纬度" style="width: 140px" />
+            <el-button size="small" text type="primary" @click="fillCenterFromBoundary">
+              从边界取中心
+            </el-button>
+          </div>
+        </el-form-item>
+        <el-form-item label="坐标系">
+          <el-select v-model="editing.crs" style="width: 100%" filterable allow-create
+                     placeholder="成果与影像采用的坐标系">
+            <el-option value="EPSG:4326" label="EPSG:4326（WGS84 经纬度）" />
+            <el-option value="EPSG:4490" label="EPSG:4490（CGCS2000）" />
+            <el-option value="EPSG:4547" label="EPSG:4547（CGCS2000 3度带 114E）" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="项目说明">
+          <el-input v-model="editing.description" type="textarea" :rows="2"
+                    placeholder="监测目标、交付范围等" />
         </el-form-item>
       </el-form>
       <template #footer>
@@ -229,8 +293,49 @@ async function load() {
 }
 
 function onCreate() {
-  editing.value = { name: '', region: '', status: 'PLANNING', manager: auth.user?.displayName || '', description: '' }
+  editing.value = {
+    name: '',
+    region: '',
+    status: 'PLANNING',
+    manager: auth.user?.displayName || '',
+    description: '',
+    // 矿山业务档案初始值：留空由用户填，不预填假数据
+    mineralType: '锂矿',
+    licenseNo: '',
+    licenseAreaKm2: undefined,
+    miningMethod: '露天',
+    centerLng: undefined,
+    centerLat: undefined,
+    contactPerson: '',
+    contactPhone: '',
+    crs: 'EPSG:4326'
+  }
   dialogVisible.value = true
+}
+
+/** 从项目边界（GeoJSON）取几何中心，省得手填经纬度 */
+async function fillCenterFromBoundary() {
+  const id = editing.value?.id
+  if (!id) {
+    ElMessage.info('新项目还没有边界，请保存后到「边界管理」导入，再回来取中心')
+    return
+  }
+  try {
+    const raw = await projectApi.boundary(id)
+    const j = typeof raw === 'string' ? JSON.parse(raw) : raw
+    const ring = j?.mining || j?.disturbance || j?.ecological
+    if (!Array.isArray(ring) || ring.length < 3) {
+      ElMessage.warning('该项目还没有可用的边界，请先到「边界管理」导入')
+      return
+    }
+    let sx = 0, sy = 0
+    for (const p of ring) { sx += p[0]; sy += p[1] }
+    editing.value!.centerLng = Number((sx / ring.length).toFixed(6))
+    editing.value!.centerLat = Number((sy / ring.length).toFixed(6))
+    ElMessage.success('已按边界中心填入坐标')
+  } catch (e: any) {
+    ElMessage.error('读取边界失败：' + (e?.message || e))
+  }
 }
 
 function onEdit(row: Project) {
@@ -247,10 +352,15 @@ async function onSave() {
   try {
     if (editing.value.id) {
       await projectApi.update(editing.value.id, editing.value)
+      ElMessage.success('已保存')
     } else {
-      await projectApi.create(editing.value)
+      const created: any = await projectApi.create(editing.value)
+      ElMessage.success('项目已创建，已切换为当前项目')
+      // 新建后立刻切到该项目：避免用户建完还在旧项目里操作，导致数据挂错项目
+      if (created?.id) {
+        projectStore.set(created.id)
+      }
     }
-    ElMessage.success('已保存')
     dialogVisible.value = false
     await load()
   } catch (e: any) {
@@ -315,4 +425,17 @@ onMounted(load)
 .share-row { display: flex; align-items: center; gap: 10px; padding: 6px 0; font-size: 12px; }
 .sr-token { font-family: monospace; color: #1f2329; width: 100px; }
 .sr-time { color: #86909c; flex: 1; }
+.proj-tip {
+  background: #f0f7ff; border-left: 3px solid #1677ff;
+  padding: 8px 12px; border-radius: 4px; font-size: 12px;
+  color: #4e5969; line-height: 1.6; margin-bottom: 14px;
+}
+.form-block-title {
+  font-size: 13px; font-weight: 600; color: #1f2329;
+  margin: 14px 0 10px; padding-left: 8px;
+  border-left: 3px solid #1677ff;
+}
+.form-block-title:first-of-type { margin-top: 0; }
+.unit { font-size: 12px; color: #86909c; margin-left: 8px; }
+.coord-row { display: flex; align-items: center; gap: 8px; }
 </style>

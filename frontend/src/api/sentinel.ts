@@ -271,3 +271,21 @@ export const ecologyApi = {
       })
   }
 }
+
+/** 本地解译任务状态查询（inference 后台线程的真实进度与错误） */
+export const inferenceApi = {
+  status(taskId: string): Promise<{
+    taskId: string
+    status: string          // PENDING / RUNNING / SUCCESS / EMPTY / FAILED
+    progress: number
+    error?: string | null
+    result?: any
+  }> {
+    return sentinel
+      .get(`/api/v1/inference/${taskId}/status`, { timeout: 15000 })
+      .then((r) => {
+        if (r.data.code !== 0) throw new Error(r.data.message || '任务状态查询失败')
+        return r.data.data
+      })
+  }
+}

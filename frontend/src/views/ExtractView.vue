@@ -84,6 +84,14 @@
           >
             {{ auth.hasAction('action:extract-manage') ? '开始真实解译' : '当前角色无提取权限' }}
           </el-button>
+          <!-- 解译进行中的动态提示：让用户看到已等待多久，而不是以为卡死 -->
+          <div v-if="extracting && extractHint" class="extract-hint">
+            {{ extractHint }}
+          </div>
+          <!-- 解译进行中的动态提示：让用户看到已等待多久，而不是以为卡死 -->
+          <div v-if="extracting && extractHint" class="extract-hint">
+            {{ extractHint }}
+          </div>
           <div class="form-note">
             真实解译：解译服务读取影像波段，NDVI/NDWI/NDBI 阈值分割后矢量化，
             属「潜在水土流失风险筛查」，非实测侵蚀量。
@@ -183,6 +191,7 @@ import {
   CallbackProperty, PolygonHierarchy, Rectangle
 } from 'cesium'
 import { extractionApi, imageryApi, boundaryApi } from '@/api'
+import { inferenceApi } from '@/api/sentinel'
 import { haToKm2 } from '@/utils/format'
 import TimeSeriesPanel from '@/components/TimeSeriesPanel.vue'
 import { tiandituBaseLayers } from '@/map/basemap'
@@ -213,6 +222,8 @@ const classChoices = [
 
 const form = reactive({ classType: 'VEGETATION', satellite: 'SENTINEL2', year: 2025, name: '' })
 const extracting = ref(false)
+/** 解译过程中的动态提示（已等待时长 / 进度） */
+const extractHint = ref('')
 const drawing = ref(false)
 const records = ref<Extraction[]>([])
 const compareMode = ref(false)
@@ -511,6 +522,8 @@ async function runExtract() {
     return
   }
   extracting.value = true
+  extractHint.value = ''
+  extractHint.value = ''
   try {
     const { taskId } = await extractionApi.submit({
       projectId: projectStore.currentId,
@@ -541,21 +554,59 @@ async function runExtract() {
 }
 
 /**
- * 轮询等待真实解译回调落库。
- * inference 算完后回调 Java 写入 extractions 表，这里按 taskId 查找结果。
+ * 轮询等待解译完成。
+ *
+ * 修复要点（原实现只盲等 60 秒，高分影像必然误报超时）：
+ *  1. 先查 inference 的 /status —— 能拿到真实状态（RUNNING/SUCCESS/EMPTY/FAILED）
+ *     与进度，失败时还能拿到具体错误，不用再让用户去翻服务日志
+ *  2. 任务 SUCCESS/EMPTY 后，再等 Java 回调落库（回调与计算之间有延迟）
+ *  3. 超时上限放宽到 10 分钟（高分影像读全波段 + 矢量化确实慢）
+ *  4. 每 5 秒更新一次「已等待 N 秒」，让用户知道在跑而不是卡死
  */
-async function pollUntilDone(taskId: string, maxTicks = 60) {
-  for (let i = 0; i < maxTicks; i++) {
+async function pollUntilDone(taskId: string, maxSeconds = 600) {
+  const started = Date.now()
+  let remoteStatus = 'PENDING'
+  let remoteError: string | null = null
+
+  for (let i = 0; i < maxSeconds; i++) {
     await new Promise((r) => setTimeout(r, 1000))
+    const waited = Math.round((Date.now() - started) / 1000)
+
+    // 每 5 秒刷新一次提示，避免用户以为卡死
+    if (waited % 5 === 0) {
+      extractHint.value = `正在解译…已等待 ${waited} 秒（进度 ${remoteStatus === 'RUNNING' ? '计算中' : remoteStatus}）`
+    }
+
+    // 1. 查 inference 真实状态
     try {
-      const list = await extractionApi.list(projectStore.currentId)
-      const hit = list.find((r) => r.taskId === taskId)
-      if (hit) return hit
-    } catch {
-      // 后端暂时不可达则继续等
+      const st = await inferenceApi.status(taskId)
+      remoteStatus = st.status || 'RUNNING'
+      remoteError = st.error || null
+      if (remoteStatus === 'FAILED') {
+        throw new Error(`解译失败：${remoteError || '未知原因（详见解译服务日志）'}`)
+      }
+    } catch (e: any) {
+      // FAILED 的异常要抛出；状态查询本身失败则忽略继续等
+      if (String(e?.message || '').startsWith('解译失败')) throw e
+    }
+
+    // 2. 算完了再查数据库（等回调落库，可能滞后几秒）
+    if (remoteStatus === 'SUCCESS' || remoteStatus === 'EMPTY') {
+      try {
+        const list = await extractionApi.list(projectStore.currentId)
+        const hit = list.find((r) => r.taskId === taskId)
+        if (hit) return hit
+      } catch {
+        // 后端暂时不可达，继续等回调
+      }
     }
   }
-  throw new Error('解译超时，请检查解译服务日志')
+
+  throw new Error(
+    `解译超时（已等待 ${maxSeconds} 秒，任务状态 ${remoteStatus}）。` +
+    '高分影像首次解译较慢，可稍后到「解译记录」中查看结果；' +
+    '若反复超时请查看解译服务日志'
+  )
 }
 
 async function loadRecords() {
@@ -858,4 +909,9 @@ onBeforeUnmount(() => {
 }
 
 .compare-note { margin-top: 8px; font-size: 12px; color: #64748b; }
+.extract-hint {
+  margin-top: 8px; padding: 6px 10px; border-radius: 6px;
+  background: #f0fdfa; color: #0d9488; font-size: 12px;
+  display: flex; align-items: center; gap: 6px;
+}
 </style>

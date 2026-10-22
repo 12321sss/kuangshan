@@ -31,8 +31,18 @@ public class ScreenController {
         this.projectService = projectService;
     }
 
+    /** 管理员可看全部项目，普通用户只看自己参与的 */
+    private boolean isAdmin(org.springframework.security.core.Authentication auth) {
+        return auth != null && auth.getAuthorities().stream()
+                .anyMatch(a -> "ROLE_ADMIN".equals(a.getAuthority()));
+    }
+
     @GetMapping("/summary")
-    public ApiResponse<Map<String, Object>> summary(@RequestParam long projectId) {
+    public ApiResponse<Map<String, Object>> summary(@RequestParam long projectId,
+                                                    org.springframework.security.core.Authentication auth) {
+        // 项目隔离：大屏汇总含矿区名称、联系人、告警数等敏感信息，必须校验成员身份。
+        // 修复前任何登录用户传任意 projectId 就能看到别人矿区的运营数据。
+        projectService.requireAccess(projectId, auth.getName(), isAdmin(auth));
         Project project = projectService.get(projectId);
         long online = sensorService.list(projectId).stream().filter(s -> "ONLINE".equals(s.getStatus())).count();
         long total = sensorService.list(projectId).size();

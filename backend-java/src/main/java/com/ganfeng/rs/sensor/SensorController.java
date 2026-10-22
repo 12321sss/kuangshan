@@ -1,6 +1,8 @@
 package com.ganfeng.rs.sensor;
 
 import com.ganfeng.rs.common.ApiResponse;
+import com.ganfeng.rs.common.BizException;
+import com.ganfeng.rs.common.PermissionGuard;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -9,6 +11,7 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.security.core.Authentication;
 
 import java.nio.charset.StandardCharsets;
 import java.util.List;
@@ -22,26 +25,50 @@ import java.util.Map;
 public class SensorController {
 
     private final SensorService sensorService;
+    private final PermissionGuard guard;
 
-    public SensorController(SensorService sensorService) {
+    public SensorController(SensorService sensorService, PermissionGuard guard) {
         this.sensorService = sensorService;
+        this.guard = guard;
+    }
+
+    /**
+     * 按传感器 id 校验项目访问权。
+     *
+     * 修复：此前本控制器 4 个端点都没有权限校验，任何登录用户只要知道传感器 id
+     * 就能读到其他项目的位移/雨量数据并导出 CSV——属于跨项目越权。
+     */
+    private void requireSensorAccess(String sensorId, Authentication auth) {
+        Sensor sensor = sensorService.get(sensorId);
+        if (sensor == null) {
+            throw BizException.notFound("传感器不存在: " + sensorId);
+        }
+        if (sensor.getProjectId() != null) {
+            guard.requireAccess(sensor.getProjectId(), auth);
+        }
     }
 
     @GetMapping
-    public ApiResponse<List<Sensor>> list(@RequestParam(required = false) Long projectId) {
+    public ApiResponse<List<Sensor>> list(@RequestParam Long projectId, Authentication auth) {
+        // projectId 必填并校验成员身份：传感器数据按项目隔离，不能跨项目读
+        guard.requireAccess(projectId, auth);
         return ApiResponse.ok(sensorService.list(projectId));
     }
 
     @GetMapping("/{id}/data")
     public ApiResponse<List<SensorDataPoint>> data(@PathVariable String id,
-                                                   @RequestParam(defaultValue = "24") int hours) {
+                                                   @RequestParam(defaultValue = "24") int hours,
+                                                   Authentication auth) {
+        requireSensorAccess(id, auth);
         return ApiResponse.ok(sensorService.history(id, hours));
     }
 
     /** GNSS 位移多分量（X/Y/Z/合位移） */
     @GetMapping("/{id}/displacement")
     public ApiResponse<Map<String, List<SensorDataPoint>>> displacement(@PathVariable String id,
-                                                                        @RequestParam(defaultValue = "24") int hours) {
+                                                                        @RequestParam(defaultValue = "24") int hours,
+                                                                        Authentication auth) {
+        requireSensorAccess(id, auth);
         return ApiResponse.ok(sensorService.displacement(id, hours));
     }
 
@@ -51,7 +78,9 @@ public class SensorController {
      */
     @GetMapping("/{id}/export")
     public ResponseEntity<byte[]> exportCsv(@PathVariable String id,
-                                            @RequestParam(defaultValue = "168") int hours) {
+                                            @RequestParam(defaultValue = "168") int hours,
+                                            Authentication auth) {
+        requireSensorAccess(id, auth);
         List<SensorDataPoint> points = sensorService.history(id, hours);
         Sensor sensor = sensorService.get(id);
 

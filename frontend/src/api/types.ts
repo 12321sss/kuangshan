@@ -9,6 +9,26 @@ export interface Project {
   createdAt: string
   description: string
   members: string[]
+
+  // ---- 矿山业务档案（2026-10-22 新增，后端 Project 实体同步）----
+  /** 矿种：锂矿 / 铁矿 / 石灰岩 等 */
+  mineralType?: string
+  /** 采矿许可证号 */
+  licenseNo?: string
+  /** 矿权面积（km²），越界分析的对比基准 */
+  licenseAreaKm2?: number
+  /** 开采方式：露天 / 井下 / 联合 */
+  miningMethod?: string
+  /** 矿区中心点经度（新建后地图默认定位） */
+  centerLng?: number
+  /** 矿区中心点纬度 */
+  centerLat?: number
+  /** 客户方对接人 */
+  contactPerson?: string
+  /** 客户方联系方式 */
+  contactPhone?: string
+  /** 成果与影像采用的坐标系 */
+  crs?: string
 }
 
 export type SensorType = 'DISP' | 'RAIN' | 'SOIL' | 'WATER'
