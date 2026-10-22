@@ -70,8 +70,19 @@ def _shapely_to_rings(geom) -> list[dict]:
     return out
 
 
-def _crs_from_wkt(wkt: str | None) -> tuple[CRS | None, str]:
-    """WKT → rasterio CRS；失败返回 (None, 原因)"""
+def _crs_from_wkt(wkt: str | None, override: str | None = None) -> tuple[CRS | None, str]:
+    """WKT → rasterio CRS；用户手选的 EPSG 优先于文件里的 .prj
+
+    为什么允许手选：CAD 直接导出的 .shp 常常只有几何（没有 .prj），
+    此时无法判断坐标系；让用户显式指定 EPSG 是唯一可靠的办法——
+    宁可让他选一次，也不要猜错把边界偏到几百米外。
+    """
+    if override:
+        try:
+            crs = CRS.from_user_input(override)
+            return crs, f"按用户指定坐标系 {crs.to_string()}"
+        except Exception as ex:  # noqa: BLE001
+            raise ValueError(f"指定的坐标系无法识别：{override}（{ex}）") from ex
     if not wkt:
         return None, "文件未包含 .prj 坐标系定义"
     try:
@@ -94,7 +105,8 @@ def _plausible_wgs84(rings: list[list[list[float]]]) -> bool:
 # ---------------------------------------------------------------------------
 
 def _read_shapefile(shp: bytes, dbf: bytes | None, shx: bytes | None,
-                    prj: str | None, base_name: str) -> dict[str, Any]:
+                    prj: str | None, base_name: str,
+                    override_crs: str | None = None) -> dict[str, Any]:
     import shapefile  # pyshp
 
     kwargs: dict[str, Any] = {"shp": io.BytesIO(shp)}
@@ -104,8 +116,24 @@ def _read_shapefile(shp: bytes, dbf: bytes | None, shx: bytes | None,
         kwargs["shx"] = io.BytesIO(shx)
     reader = shapefile.Reader(**kwargs)
 
-    field_names = [f[0] for f in reader.fields[1:]] if reader.numRecords else []
-    crs, crs_note = _crs_from_wkt(prj)
+    # 注意：没有 .dbf 时 pyshp 的 numRecords 是 None，直接参与比较会抛
+    # TypeError: '>' not supported between instances of 'NoneType' and 'int'。
+    # 单传 .shp（CAD 导出最常见）就会踩到，这里统一按 0 处理。
+    n_rec = reader.numRecords or 0
+    field_names = [f[0] for f in reader.fields[1:]] if n_rec else []
+    crs, crs_note = _crs_from_wkt(prj, override_crs)
+
+    # 图层类型先看一眼：CAD 导出的常是线（POLYLINE），提前给出人话提示
+    shp_type = reader.shapeType
+    if shp_type in (shapefile.POINT, shapefile.POINTM, shapefile.POINTZ,
+                    shapefile.MULTIPOINT, shapefile.MULTIPOINTM, shapefile.MULTIPOINTZ):
+        raise ValueError(
+            f"{base_name} 是**点**要素图层，不是面。边界必须是闭合面（Polygon），"
+            "请在 CAD/ArcGIS 中导出为面图层（或先用「面域/闭合多段线」构面）后再上传")
+    if shp_type in (shapefile.POLYLINE, shapefile.POLYLINEM, shapefile.POLYLINEZ):
+        raise ValueError(
+            f"{base_name} 是**线**要素图层（CAD 导出的多段线），不是面。"
+            "请先在 ArcGIS/QGIS 里用「要素转面（Feature To Polygon）」转成面，或上传闭合的 GeoJSON/KML")
 
     features: list[dict] = []
     raw_bounds: list[list[float]] = []
@@ -143,7 +171,7 @@ def _read_shapefile(shp: bytes, dbf: bytes | None, shx: bytes | None,
                 transformed.append({"outer": outer, "holes": holes})
             rings = transformed
 
-        rec = reader.record(idx).as_dict() if reader.numRecords > idx else {}
+        rec = reader.record(idx).as_dict() if n_rec > idx else {}
         name = ""
         for key in ("name", "NAME", "Name", "名称", "MC", "矿权名称"):
             if key in rec and str(rec[key]).strip():
@@ -288,10 +316,13 @@ def _read_kml(content: bytes) -> dict[str, Any]:
 # 对外入口
 # ---------------------------------------------------------------------------
 
-def import_boundary(filename: str, content: bytes) -> dict[str, Any]:
+def import_boundary(filename: str, content: bytes,
+                    source_crs: str | None = None) -> dict[str, Any]:
     """解析边界文件，返回统一的要素列表
 
     支持：.zip（内含 shp 四件套）/ .shp / .geojson / .json / .kml
+    source_crs：用户手选的坐标系（如 EPSG:4547），优先于文件内 .prj；
+                单传 .shp 没有 .prj 时靠它兜底
     """
     if not content:
         raise ValueError("文件内容为空")
@@ -338,11 +369,11 @@ def import_boundary(filename: str, content: bytes) -> dict[str, Any]:
             warnings.append("缺少 .prj，将按坐标范围判断是否为经纬度")
 
         result = _read_shapefile(zf.read(shp_name), dbf, shx, prj,
-                                 base.rsplit("/", 1)[-1])
+                                 base.rsplit("/", 1)[-1], source_crs)
     elif lower.endswith(".shp"):
         # 单传 shp：几何能读，但坐标系和属性缺失
-        warnings.append("只上传了 .shp，缺少 .dbf/.prj。建议打包 zip 上传以保留坐标系与属性")
-        result = _read_shapefile(content, None, None, None, filename[:-4])
+        warnings.append("只上传了 .shp：属性不可用；坐标系若不在下方指定，只能按坐标值推断")
+        result = _read_shapefile(content, None, None, None, filename[:-4], source_crs)
     elif lower.endswith((".geojson", ".json")):
         result = _read_geojson(content)
     elif lower.endswith(".kml"):
@@ -356,6 +387,11 @@ def import_boundary(filename: str, content: bytes) -> dict[str, Any]:
     else:
         raise ValueError("不支持的文件类型，请上传 .zip（含 shp 四件套）/ .shp / .geojson / .kml")
 
+    return _finalize(result, warnings)
+
+
+def _finalize(result: dict[str, Any], warnings: list[str]) -> dict[str, Any]:
+    """统一收尾：合并提示、校验要素非空、算汇总"""
     result["warnings"] = warnings + ([result["crsNote"]] if result.get("crsNote") else [])
 
     if not result["features"]:
@@ -364,7 +400,6 @@ def import_boundary(filename: str, content: bytes) -> dict[str, Any]:
             "② 要素没有被全部过滤掉"
         )
 
-    # 汇总：总面积、总顶点数、是否含洞
     total_ha = sum(f["areaHa"] for f in result["features"])
     result["summary"] = {
         "featureCount": len(result["features"]),
@@ -374,6 +409,57 @@ def import_boundary(filename: str, content: bytes) -> dict[str, Any]:
         "largestAreaHa": round(max(f["areaHa"] for f in result["features"]), 4),
     }
     return result
+
+
+def import_boundary_files(files: list[dict[str, Any]],
+                          source_crs: str | None = None) -> dict[str, Any]:
+    """多文件导入：shp / shx / dbf / prj 分开选中也能正确配对
+
+    为什么需要它：CAD 导出的是一个文件夹里的四个文件，用户很自然会
+    「全选」而不是先打包 zip；只收单个 .shp 会丢坐标系。
+    """
+    items = [(str(f.get("filename") or ""), f.get("content") or b"") for f in files]
+    items = [(n, c) for n, c in items if n and c]
+    if not items:
+        raise ValueError("没有收到文件内容")
+
+    if len(items) == 1:
+        return import_boundary(items[0][0], items[0][1], source_crs)
+
+    # 有 zip 就按 zip 处理（zip 里可能就是一整套）
+    for name, content in items:
+        if name.lower().endswith(".zip"):
+            return import_boundary(name, content, source_crs)
+
+    shp_list = [(n, c) for n, c in items if n.lower().endswith(".shp")]
+    if not shp_list:
+        # 没有 shp：交给单文件逻辑处理 geojson/kml
+        return import_boundary(items[0][0], items[0][1], source_crs)
+    if len(shp_list) > 1:
+        raise ValueError(f"选择了 {len(shp_list)} 个 .shp，一次只能导入一个图层")
+
+    shp_name, shp_bytes = shp_list[0]
+    stem = shp_name.rsplit(".", 1)[0].lower()
+
+    def sibling(ext: str) -> bytes | None:
+        for n, c in items:
+            ln = n.lower()
+            if ln.endswith(ext) and ln.rsplit(".", 1)[0] == stem:
+                return c
+        return None
+
+    dbf, shx, prj_bytes = sibling(".dbf"), sibling(".shx"), sibling(".prj")
+    prj = prj_bytes.decode("utf-8-sig", errors="replace") if prj_bytes else None
+
+    warnings: list[str] = []
+    if dbf is None:
+        warnings.append("未选中 .dbf：要素名称等属性不可用（几何与面积不受影响）")
+    if prj is None and not source_crs:
+        warnings.append("未选中 .prj 且没有指定坐标系：只能按坐标值判断是否为经纬度")
+
+    result = _read_shapefile(shp_bytes, dbf, shx, prj,
+                             shp_name.rsplit(".", 1)[0], source_crs)
+    return _finalize(result, warnings)
 
 
 def health() -> dict:

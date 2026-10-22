@@ -50,27 +50,56 @@
 
         <el-upload
           drag
+          multiple
           :auto-upload="false"
           :show-file-list="false"
-          accept=".zip,.shp,.geojson,.json,.kml,.kmz"
-          :on-change="onFileChange"
+          accept=".zip,.shp,.shx,.dbf,.prj,.geojson,.json,.kml,.kmz"
+          :on-change="onFilesChange"
         >
           <el-icon class="up-icon"><UploadFilled /></el-icon>
           <div class="up-text">把边界文件拖到这里，或<em>点击选择</em></div>
-          <div class="up-tip">.shp 必须与 .shx/.dbf/.prj 一起打包成 zip，否则坐标系无法判定</div>
+          <div class="up-tip">
+            可一次选中 shp + shx + dbf + prj 四个文件（推荐），或直接拖 zip；
+            只选 .shp 会缺坐标系，需要在下方手动指定
+          </div>
         </el-upload>
 
-        <div v-if="pickedFile" class="picked">
-          <el-icon><Document /></el-icon>
-          <span class="picked-name">{{ pickedFile.name }}</span>
-          <span class="picked-size">{{ (pickedFile.size / 1024).toFixed(1) }} KB</span>
+        <!-- 已选文件：多文件时逐个列出，便于确认四件套是否齐全 -->
+        <div v-if="pickedFiles.length" class="picked-list">
+          <div v-for="f in pickedFiles" :key="f.name" class="picked">
+            <el-icon><Document /></el-icon>
+            <span class="picked-name">{{ f.name }}</span>
+            <span class="picked-size">{{ (f.size / 1024).toFixed(1) }} KB</span>
+          </div>
+          <div class="picked-actions">
+            <span v-if="missingHint" class="missing">{{ missingHint }}</span>
+            <el-button link size="small" type="danger" @click="clearPicked">清空</el-button>
+          </div>
         </div>
+
+        <el-form-item label="坐标系（选填，仅当文件没有 .prj 时必填）" class="crs-item">
+          <el-select v-model="sourceCrs" size="small" clearable placeholder="留空则读 .prj / 按坐标值推断" style="width: 100%">
+            <el-option label="WGS84 经纬度（EPSG:4326）" value="EPSG:4326" />
+            <el-option label="CGCS2000 3度带 117E（EPSG:4547，江西常用）" value="EPSG:4547" />
+            <el-option label="CGCS2000 3度带 114E（EPSG:4546）" value="EPSG:4546" />
+            <el-option label="CGCS2000 3度带 120E（EPSG:4548）" value="EPSG:4548" />
+            <el-option label="UTM 50N / WGS84（EPSG:32650）" value="EPSG:32650" />
+            <el-option label="西安80 3度带 117E（EPSG:2383）" value="EPSG:2383" />
+            <el-option label="北京54 3度带 117E（EPSG:2434）" value="EPSG:2434" />
+          </el-select>
+        </el-form-item>
+
+        <!-- 导入失败时把原因和建议摊开，而不是只弹一个 toast -->
+        <el-alert v-if="importError" type="error" :closable="false" show-icon class="err-box">
+          <template #title>{{ importError }}</template>
+          <div class="err-tip">{{ errorAdvice }}</div>
+        </el-alert>
 
         <el-button
           type="primary"
           class="import-btn"
           :loading="importing"
-          :disabled="!pickedFile"
+          :disabled="!pickedFiles.length"
           @click="doImport"
         >
           解析并导入
@@ -193,7 +222,9 @@ const loading = ref(false)
 const boundaryType = ref<'PERMIT' | 'DISTURBANCE' | 'ECO'>('PERMIT')
 const customName = ref('')
 const mergeFeatures = ref(false)
-const pickedFile = ref<File | null>(null)
+const pickedFiles = ref<File[]>([])
+const sourceCrs = ref('')
+const importError = ref('')
 const importing = ref(false)
 const parsed = ref<Awaited<ReturnType<typeof boundaryApi.importFile>> | null>(null)
 const featureCount = ref(0)
@@ -247,38 +278,91 @@ async function load() {
   }
 }
 
-function onFileChange(file: any) {
-  pickedFile.value = file.raw as File
+function onFilesChange(_file: any, fileList: any[]) {
+  // el-upload 每次选中都会回调，这里以它给的完整列表为准（支持一次选多个）
+  pickedFiles.value = fileList.map((f) => f.raw as File).filter(Boolean)
   parsed.value = null
   featureCount.value = 0
+  importError.value = ''
+  syncCrsWithFiles()
 }
+
+function clearPicked() {
+  pickedFiles.value = []
+  parsed.value = null
+  importError.value = ''
+}
+
+/** 只选了 .shp 时提示缺哪些配套文件（四件套不全是最常见的失败原因） */
+const missingHint = computed(() => {
+  const names = pickedFiles.value.map((f) => f.name.toLowerCase())
+  if (names.some((n) => n.endsWith('.zip'))) return ''
+  const hasShp = names.some((n) => n.endsWith('.shp'))
+  if (!hasShp) return ''
+  const miss: string[] = []
+  if (!names.some((n) => n.endsWith('.prj'))) miss.push('.prj（坐标系）')
+  if (!names.some((n) => n.endsWith('.dbf'))) miss.push('.dbf（属性）')
+  if (!names.some((n) => n.endsWith('.shx'))) miss.push('.shx（索引）')
+  return miss.length ? `未选中 ${miss.join('、')}，建议一并选中或打包 zip` : ''
+})
+
+/** 没有 .prj 时把坐标系选择器标出来（用户需要手动指定） */
+function syncCrsWithFiles() {
+  const names = pickedFiles.value.map((f) => f.name.toLowerCase())
+  const hasPrj = names.some((n) => n.endsWith('.prj')) || names.some((n) => n.endsWith('.zip'))
+  if (hasPrj) sourceCrs.value = ''
+}
+
+/** 根据错误信息给出下一步动作，避免用户只看到一句技术报错 */
+const errorAdvice = computed(() => {
+  const msg = importError.value
+  if (msg.includes('线') && msg.includes('要素')) {
+    return '做法：在 ArcGIS/QGIS 里用「要素转面 Feature To Polygon」把多段线转成面；或让 CAD 导出闭合多段线后再构面'
+  }
+  if (msg.includes('点') && msg.includes('要素')) {
+    return '做法：边界必须是闭合面图层，请把点图层换成面图层再导出'
+  }
+  if (msg.includes('.prj') || msg.includes('坐标系')) {
+    return '做法：把 .prj 一起选中；若拿不到 .prj，在上方「坐标系」里手动指定（江西常用 CGCS2000 3度带 117E / EPSG:4547）'
+  }
+  if (msg.includes('没有有效的面要素')) {
+    return '做法：确认图层的几何类型是面，且要素没有被全部过滤掉'
+  }
+  return '可先按提示调整文件后重试；仍失败请把文件名与错误信息发我排查'
+})
 
 async function doImport() {
   const pid = projectStore.currentId
-  if (!pid || !pickedFile.value) return
-  const f = pickedFile.value
-  if (f.size > 40 * 1024 * 1024) {
-    ElMessage.warning('文件超过 40MB，请先裁剪或简化边界')
+  if (!pid || !pickedFiles.value.length) return
+  const totalKb = pickedFiles.value.reduce((s, f) => s + f.size, 0) / 1024
+  if (totalKb > 60 * 1024) {
+    ElMessage.warning('文件合计超过 60MB，请先裁剪或简化边界')
     return
   }
   importing.value = true
+  importError.value = ''
   try {
-    const b64 = await toBase64(f)
+    const files = await Promise.all(
+      pickedFiles.value.map(async (f) => ({ filename: f.name, contentBase64: await toBase64(f) }))
+    )
     const res = await boundaryApi.importFile({
       projectId: pid,
       boundaryType: boundaryType.value,
-      filename: f.name,
-      contentBase64: b64,
+      files,
+      // 只在用户手选时传，避免覆盖文件自带的 .prj
+      sourceCrs: sourceCrs.value || undefined,
       name: customName.value.trim() || undefined,
       merge: mergeFeatures.value
     })
     parsed.value = res
     featureCount.value = res.count
     ElMessage.success(`导入成功，共 ${res.count} 条边界`)
-    pickedFile.value = null
+    pickedFiles.value = []
     await load()
   } catch (e: any) {
-    ElMessage.error(e?.message || '导入失败')
+    // 完整原因留在页面里（toast 会自动消失，用户看不到该怎么改）
+    importError.value = e?.message || '导入失败'
+    ElMessage.error('导入失败，原因见左侧红框')
   } finally {
     importing.value = false
   }
@@ -390,6 +474,14 @@ watch(() => projectStore.currentId, load)
 .up-text { font-size: 13px; color: #4e5969; }
 .up-text em { color: #0d9488; font-style: normal; }
 .up-tip { font-size: 11px; color: #a9aeb8; margin-top: 2px; }
+
+.picked-list { margin-top: 8px; }
+.picked-actions { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 4px; }
+.missing { font-size: 11px; color: #b45309; line-height: 1.5; flex: 1; }
+.crs-item { margin-top: 10px; }
+.crs-item :deep(.el-form-item__label) { font-size: 11px; color: #6b7280; line-height: 1.4; padding-bottom: 2px; }
+.err-box { margin-top: 10px; border-radius: 6px; }
+.err-tip { font-size: 11px; line-height: 1.6; margin-top: 4px; color: #7f1d1d; }
 
 .picked {
   display: flex; align-items: center; gap: 6px;

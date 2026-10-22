@@ -101,8 +101,19 @@ public class AoiBoundaryController {
         return ApiResponse.ok(out);
     }
 
+    /** 单个文件的名称与内容（base64） */
+    public record FileItem(String filename, String contentBase64) {}
+
+    /**
+     * 导入请求
+     *
+     * files 支持「shp/shx/dbf/prj 分开选中」的多文件提交；
+     * filename + contentBase64 是旧的单文件方式，保留兼容。
+     * sourceCrs 用于兜底：CAD 导出的 shp 常没有 .prj，只能由用户指定坐标系。
+     */
     public record ImportReq(Long projectId, String boundaryType, String filename,
-                            String contentBase64, String name,
+                            String contentBase64, List<FileItem> files,
+                            String sourceCrs, String name,
                             Boolean merge) {}
 
     /**
@@ -123,13 +134,22 @@ public class AoiBoundaryController {
         if (!VALID_TYPES.contains(type)) {
             throw new BizException(400, "边界类型只能是 PERMIT（矿权范围）/ DISTURBANCE（扰动边界）/ ECO（生态缓冲区）");
         }
-        if (req.contentBase64() == null || req.contentBase64().isBlank()) {
-            throw new BizException(400, "文件内容为空");
+
+        if ((req.contentBase64() == null || req.contentBase64().isBlank())
+                && (req.files() == null || req.files().isEmpty())) {
+            throw new BizException(400, "没有收到文件内容");
         }
 
         Map<String, Object> payload = new LinkedHashMap<>();
-        payload.put("filename", req.filename());
-        payload.put("contentBase64", req.contentBase64());
+        if (req.files() != null && !req.files().isEmpty()) {
+            payload.put("files", req.files());
+        } else {
+            payload.put("filename", req.filename());
+            payload.put("contentBase64", req.contentBase64());
+        }
+        if (req.sourceCrs() != null && !req.sourceCrs().isBlank()) {
+            payload.put("sourceCrs", req.sourceCrs());
+        }
 
         Map<String, Object> data;
         try {

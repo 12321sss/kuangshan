@@ -496,12 +496,15 @@ export const boundaryApi = {
     hint: string
   }> => http.get('/aoi-boundaries/summary', { params: { projectId } }),
 
-  /** 导入边界文件（内容走 base64，避免 multipart 多层转发） */
+  /** 导入边界文件（内容走 base64，避免 multipart 多层转发）
+   *  files 支持 shp/shx/dbf/prj 分开选中；sourceCrs 用于 .prj 缺失时手选坐标系 */
   importFile: (req: {
     projectId: number
     boundaryType: 'PERMIT' | 'DISTURBANCE' | 'ECO'
-    filename: string
-    contentBase64: string
+    filename?: string
+    contentBase64?: string
+    files?: Array<{ filename: string; contentBase64: string }>
+    sourceCrs?: string
     name?: string
     merge?: boolean
   }): Promise<{
