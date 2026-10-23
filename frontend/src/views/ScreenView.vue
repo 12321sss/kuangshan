@@ -195,7 +195,7 @@
         </div>
 
         <!-- 地物构成：解译结果按类累计面积，与「地物构成」分析页口径一致 -->
-        <div class="panel flex-panel">
+        <div class="panel pie-panel">
           <div class="panel-title">地物构成（累计）</div>
           <div ref="classPieRef" class="donut"></div>
         </div>
@@ -206,7 +206,7 @@
     <transition name="slide-right">
       <div v-show="rightVisible" class="panel-col right">
         <!-- 解译成果时序：按拍摄日期堆叠，能看出哪期扩了多少 -->
-        <div class="panel flex-panel">
+        <div class="panel series-panel">
           <div class="panel-title">解译成果时序</div>
           <div ref="seriesRef" class="donut"></div>
         </div>
@@ -764,14 +764,14 @@ function renderClassPie() {
   classPie.setOption({
     tooltip: { trigger: 'item', formatter: '{b}: {c} km² ({d}%)' },
     legend: {
-      type: 'scroll', orient: 'vertical', right: 0, top: 'center',
-      itemWidth: 8, itemHeight: 8, itemGap: 8,
+      type: 'scroll', orient: 'horizontal', left: 'center', bottom: 0,
+      itemWidth: 9, itemHeight: 9, itemGap: 10, icon: 'circle',
       textStyle: { color: '#94a3b8', fontSize: 10 }
     },
     series: [{
       type: 'pie',
-      radius: ['45%', '70%'],
-      center: ['32%', '50%'],
+      radius: ['40%', '64%'],
+      center: ['50%', '42%'],
       label: { show: false },
       itemStyle: { borderColor: '#0b2135', borderWidth: 1 },
       data: rs.value.classes.map((c: any) => ({
@@ -796,7 +796,7 @@ function renderSeries() {
       type: 'scroll', bottom: 0, itemWidth: 8, itemHeight: 8,
       textStyle: { color: '#94a3b8', fontSize: 10 }
     },
-    grid: { left: 40, right: 12, top: 12, bottom: 46 },
+    grid: { left: 42, right: 14, top: 14, bottom: 54 },
     xAxis: {
       type: 'category', data: dates,
       axisLabel: { color: '#64748b', fontSize: 10, formatter: (v: string) => v.slice(2) },
@@ -811,7 +811,7 @@ function renderSeries() {
       name: classLabel(cls),
       type: 'bar',
       stack: 'total',
-      barMaxWidth: 18,
+      barMaxWidth: 24,
       itemStyle: { color: CLASS_COLOR[cls] || '#94a3b8' },
       data: rows.map((r: any) => +(((r.byClass || {})[cls] || 0) / 100).toFixed(2))
     }))
@@ -1116,7 +1116,7 @@ onBeforeUnmount(() => {
   position: absolute;
   top: 76px;
   bottom: 52px;
-  width: 268px;
+  width: 314px;
   display: flex;
   flex-direction: column;
   gap: 12px;
@@ -1135,6 +1135,8 @@ onBeforeUnmount(() => {
 }
 
 .flex-panel { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.series-panel { flex: 1.2; min-height: 236px; display: flex; flex-direction: column; }
+.pie-panel { min-height: 216px; display: flex; flex-direction: column; }
 
 .layer-switch {
   display: flex; align-items: center; gap: 8px; padding: 4px 2px;
@@ -1175,12 +1177,12 @@ onBeforeUnmount(() => {
   padding: 1px 6px; border-radius: 4px; color: #5eead4;
   background: rgba(20, 184, 166, 0.12); border: 1px solid rgba(20, 184, 166, 0.3);
 }
-.recent-panel { max-height: 216px; }
+.recent-panel { max-height: 246px; }
 .recent-table { display: flex; flex-direction: column; gap: 3px; overflow-y: auto; }
 .recent-row {
-  display: grid; grid-template-columns: 74px 1fr 40px 66px;
-  align-items: center; gap: 6px; font-size: 11px;
-  padding: 3px 4px; border-radius: 4px; background: rgba(30, 58, 95, 0.25);
+  display: grid; grid-template-columns: 84px 1fr 46px 78px;
+  align-items: center; gap: 8px; font-size: 12px;
+  padding: 5px 7px; border-radius: 5px; background: rgba(30, 58, 95, 0.25);
 }
 .rc-date { color: #7dd3fc; }
 .rc-cls { color: #cbd5e1; }
@@ -1205,14 +1207,14 @@ onBeforeUnmount(() => {
 .kv .k { color: #64748b; }
 .kv .v { color: #e2e8f0; max-width: 170px; text-align: right; }
 
-.ops-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-.ops-item { text-align: center; padding: 6px 0; }
-.ops-value { font-size: 24px; font-weight: 700; color: #22d3ee; font-variant-numeric: tabular-nums; }
+.ops-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 12px; }
+.ops-item { text-align: center; padding: 3px 0; }
+.ops-value { font-size: 22px; font-weight: 700; color: #22d3ee; font-variant-numeric: tabular-nums; }
 .ops-value.danger { color: #ef4444; }
 .ops-label { font-size: 11px; color: #64748b; margin-top: 2px; }
 
 .donut-wrap { display: flex; align-items: center; }
-.donut { width: 130px; height: 130px; }
+.donut { width: 100%; height: 100%; min-height: 152px; }
 .donut-side { flex: 1; display: flex; flex-direction: column; gap: 8px; font-size: 12px; }
 .donut-row { display: flex; align-items: center; gap: 6px; }
 
