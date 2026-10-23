@@ -1177,8 +1177,36 @@ onBeforeUnmount(() => {
   padding: 1px 6px; border-radius: 4px; color: #5eead4;
   background: rgba(20, 184, 166, 0.12); border: 1px solid rgba(20, 184, 166, 0.3);
 }
-.recent-panel { max-height: 246px; }
-.recent-table { display: flex; flex-direction: column; gap: 3px; overflow-y: auto; }
+/* 最近解译记录面板：必须组成「可收缩的 flex 容器 + 内部滚动」两件套，
+   否则只设 max-height 时子列表的 overflow-y 不生效，记录会顶出面板边界（右下角被切） */
+.recent-panel {
+  flex: 0 1 auto;           /* 高度跟内容走：记录少则矮，记录多到上限后内部滚动 */
+  min-height: 0;            /* 关键：不设它 flex 子项不会被压缩 */
+  max-height: 246px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;         /* 裁掉圆角外的溢出，滚动交给内部 */
+}
+.recent-panel .panel-title { flex-shrink: 0; }  /* 标题不许被压缩 */
+.recent-table {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  flex: 1;
+  min-height: 0;            /* 关键：让 overflow-y 真正生效 */
+  overflow-y: auto;
+  padding-right: 3px;       /* 给滚动条留位置，避免压住面积数字 */
+  scrollbar-width: thin;
+  scrollbar-color: rgba(125, 211, 252, 0.35) transparent;
+}
+/* 暗色大屏下的细滚动条 */
+.recent-table::-webkit-scrollbar { width: 4px; }
+.recent-table::-webkit-scrollbar-track { background: transparent; }
+.recent-table::-webkit-scrollbar-thumb {
+  background: rgba(125, 211, 252, 0.35);
+  border-radius: 2px;
+}
+.recent-table::-webkit-scrollbar-thumb:hover { background: rgba(125, 211, 252, 0.6); }
 .recent-row {
   display: grid; grid-template-columns: 84px 1fr 46px 78px;
   align-items: center; gap: 8px; font-size: 12px;
