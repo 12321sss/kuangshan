@@ -263,6 +263,12 @@ export const analysisApi = {
 }
 
 export const screenApi = {
+  /** 大屏遥感侧聚合：KPI + 地物构成 + 按期时序 + 最近记录 + 分类精度 */
+  rsOverview: (projectId: number): Promise<any> =>
+    http.get('/screen/rs-overview', { params: { projectId } }),
+  /** 大屏遥感侧聚合：KPI + 地物构成 + 按期时序 + 最近记录 + 分类精度 */
+  rsOverview: (projectId: number): Promise<any> =>
+    http.get('/screen/rs-overview', { params: { projectId } }),
   summary: (projectId: number): Promise<ScreenSummary> =>
     http.get('/screen/summary', { params: { projectId } })
 }

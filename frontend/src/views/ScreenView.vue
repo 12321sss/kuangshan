@@ -141,37 +141,47 @@
           </div>
         </div>
 
+        <!-- 遥感成果 KPI：大屏最该先回答"解译了多少、覆盖多大" -->
         <div class="panel">
-          <div class="panel-title">运营数据</div>
+          <div class="panel-title">遥感解译成果</div>
           <div class="ops-grid">
             <div class="ops-item">
-              <div class="ops-value">{{ summary?.safeDays ?? '-' }}</div>
-              <div class="ops-label">已监测安全天数</div>
+              <div class="ops-value">{{ rs?.kpi?.imageryCount ?? '-' }}</div>
+              <div class="ops-label">影像景数</div>
             </div>
             <div class="ops-item">
-              <div class="ops-value">{{ summary?.stationCount ?? '-' }}</div>
-              <div class="ops-label">监控站点数</div>
+              <div class="ops-value">{{ rs?.kpi?.extractionCount ?? '-' }}</div>
+              <div class="ops-label">解译记录</div>
             </div>
             <div class="ops-item">
-              <div class="ops-value" :class="{ danger: (summary?.todayAlarms ?? 0) > 0 }">{{ summary?.todayAlarms ?? '-' }}</div>
-              <div class="ops-label">当天预警次数</div>
+              <div class="ops-value">{{ km2(rs?.kpi?.extractionAreaHa) }}</div>
+              <div class="ops-label">解译面积 km²</div>
             </div>
             <div class="ops-item">
-              <div class="ops-value">{{ summary?.deviceOnline ?? '-' }}/{{ summary?.deviceTotal ?? '-' }}</div>
-              <div class="ops-label">设备在线</div>
+              <div class="ops-value">{{ km2(rs?.kpi?.imageryAreaHa) }}</div>
+              <div class="ops-label">影像覆盖 km²</div>
             </div>
+            <div class="ops-item">
+              <div class="ops-value">{{ rs?.kpi?.supervisedCount ?? 0 }}</div>
+              <div class="ops-label">监督分类</div>
+            </div>
+            <div class="ops-item">
+              <div class="ops-value">{{ rs?.kpi?.fusionCount ?? 0 }}</div>
+              <div class="ops-label">融合结果</div>
+            </div>
+          </div>
+          <div class="rs-foot">
+            <span>最近解译 {{ rs?.kpi?.latestDate || '-' }}</span>
+            <span v-if="rs?.accuracy" class="acc-badge">
+              精度 OA {{ rs.accuracy.oa }}% · Kappa {{ rs.accuracy.kappa }}
+            </span>
           </div>
         </div>
 
-        <div class="panel">
-          <div class="panel-title">设备接入情况</div>
-          <div class="donut-wrap">
-            <div ref="donutRef" class="donut"></div>
-            <div class="donut-side">
-              <div class="donut-row"><i class="dot" style="background:#22d3ee"></i>在线 {{ summary?.deviceOnline ?? 0 }}</div>
-              <div class="donut-row"><i class="dot" style="background:#334155"></i>离线 {{ (summary?.deviceTotal ?? 0) - (summary?.deviceOnline ?? 0) }}</div>
-            </div>
-          </div>
+        <!-- 地物构成：解译结果按类累计面积，与「地物构成」分析页口径一致 -->
+        <div class="panel flex-panel">
+          <div class="panel-title">地物构成（累计）</div>
+          <div ref="classPieRef" class="donut"></div>
         </div>
       </div>
     </transition>
@@ -179,14 +189,10 @@
     <!-- 右侧面板组 -->
     <transition name="slide-right">
       <div v-show="rightVisible" class="panel-col right">
-        <div class="panel">
-          <div class="panel-title">站点报警统计</div>
-          <div class="alarm-grid">
-            <div v-for="a in alarmCards" :key="a.label" class="alarm-cell">
-              <div class="alarm-num" :style="{ color: a.color }">{{ a.value }}</div>
-              <div class="alarm-label">{{ a.label }}</div>
-            </div>
-          </div>
+        <!-- 解译成果时序：按拍摄日期堆叠，能看出哪期扩了多少 -->
+        <div class="panel flex-panel">
+          <div class="panel-title">解译成果时序</div>
+          <div ref="seriesRef" class="donut"></div>
         </div>
 
         <div class="panel flex-panel">
@@ -202,6 +208,19 @@
                 <span class="sensor-value" :class="{ danger: s.status === 'ALARM' }">{{ s.latestValue }} {{ s.unit }}</span>
               </div>
             </div>
+          </div>
+        </div>
+        <!-- 最近解译记录：表格比图更直观，客户看的就是"最近做了什么" -->
+        <div class="panel recent-panel">
+          <div class="panel-title">最近解译记录</div>
+          <div class="recent-table">
+            <div v-for="r in rs?.recent || []" :key="r.id" class="recent-row">
+              <span class="rc-date">{{ r.date }}</span>
+              <span class="rc-cls">{{ classLabel(r.classType) }}</span>
+              <span class="rc-method" :class="'m-' + r.method">{{ methodLabel(r.method) }}</span>
+              <span class="rc-area">{{ km2(r.areaHa) }} km²</span>
+            </div>
+            <div v-if="!rs?.recent?.length" class="recent-empty">暂无解译记录</div>
           </div>
         </div>
       </div>
@@ -242,6 +261,9 @@ const projectStore = useProjectStore()
 
 const cesiumRef = ref<HTMLDivElement>()
 const donutRef = ref<HTMLDivElement>()
+const classPieRef = ref<HTMLDivElement>()
+const seriesRef = ref<HTMLDivElement>()
+const rs = ref<any>(null)
 const summary = ref<ScreenSummary | null>(null)
 const sensors = ref<Sensor[]>([])
 const leftVisible = ref(true)
@@ -259,6 +281,28 @@ const hasToken = !!TIANDITU_TOKEN
 
 let viewer: Viewer | null = null
 let donut: echarts.ECharts | undefined
+let classPie: echarts.ECharts | undefined
+let seriesChart: echarts.ECharts | undefined
+
+/** 七类地物中文名 + 配色：与大屏「地物构成」图例保持一致 */
+const CLASS_LABEL: Record<string, string> = {
+  PIT: '露天采坑', DUMP: '排土场', TAILINGS: '尾矿', BARE: '裸地扰动',
+  ROAD: '道路', VEGETATION: '植被', WATER: '水体', BUILDING: '建筑', MOUNTAIN: '山体'
+}
+const CLASS_COLOR: Record<string, string> = {
+  PIT: '#787878', DUMP: '#b08960', TAILINGS: '#e2dac4', BARE: '#c4a882',
+  ROAD: '#fad65a', VEGETATION: '#4caf50', WATER: '#2182d6', BUILDING: '#f97316', MOUNTAIN: '#6b7280'
+}
+function classLabel(c: string) {
+  return CLASS_LABEL[c] || c || '-'
+}
+function methodLabel(m: string) {
+  return m === 'SUPERVISED' ? '分类' : m === 'FUSION' ? '融合' : '指数'
+}
+/** ha → km²，大屏只留 2 位小数 */
+function km2(ha?: number) {
+  return ((ha || 0) / 100).toFixed(2)
+}
 let moveHandler: ScreenSpaceEventHandler | null = null
 let clockTimer: ReturnType<typeof setInterval> | undefined
 let statusTimer: ReturnType<typeof setInterval> | undefined
@@ -567,24 +611,66 @@ function bindStatusBar(v: Viewer) {
   }, 500)
 }
 
-function renderDonut() {
-  if (!summary.value || !donutRef.value) return
-  if (!donut) donut = echarts.init(donutRef.value)
-  const online = summary.value.deviceOnline
-  const total = summary.value.deviceTotal
-  const rate = total > 0 ? Math.round((online / total) * 100) : 0
-  donut.setOption({
+function renderClassPie() {
+  if (!classPieRef.value || !rs.value?.classes?.length) return
+  if (!classPie) classPie = echarts.init(classPieRef.value)
+  classPie.setOption({
+    tooltip: { trigger: 'item', formatter: '{b}: {c} km² ({d}%)' },
+    legend: {
+      type: 'scroll', orient: 'vertical', right: 0, top: 'center',
+      itemWidth: 8, itemHeight: 8, itemGap: 8,
+      textStyle: { color: '#94a3b8', fontSize: 10 }
+    },
     series: [{
       type: 'pie',
-      radius: ['62%', '82%'],
-      label: { show: true, position: 'center', formatter: `${rate}%\n在线率`, color: '#7dd3fc', fontSize: 14, fontWeight: 600 },
-      data: [
-        { value: online, itemStyle: { color: '#22d3ee' } },
-        { value: total - online, itemStyle: { color: '#334155' } }
-      ]
+      radius: ['45%', '70%'],
+      center: ['32%', '50%'],
+      label: { show: false },
+      itemStyle: { borderColor: '#0b2135', borderWidth: 1 },
+      data: rs.value.classes.map((c: any) => ({
+        name: classLabel(c.classType),
+        value: +(c.totalHa / 100).toFixed(2),
+        itemStyle: { color: CLASS_COLOR[c.classType] || '#94a3b8' }
+      }))
     }]
   })
 }
+
+function renderSeries() {
+  if (!seriesRef.value || !rs.value?.series?.length) return
+  if (!seriesChart) seriesChart = echarts.init(seriesRef.value)
+  const rows = rs.value.series
+  const dates = rows.map((r: any) => r.date)
+  // 取出出现过的所有类别，按堆叠顺序排列
+  const classes = Array.from(new Set(rows.flatMap((r: any) => Object.keys(r.byClass || {})))) as string[]
+  seriesChart.setOption({
+    tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
+    legend: {
+      type: 'scroll', bottom: 0, itemWidth: 8, itemHeight: 8,
+      textStyle: { color: '#94a3b8', fontSize: 10 }
+    },
+    grid: { left: 40, right: 12, top: 12, bottom: 46 },
+    xAxis: {
+      type: 'category', data: dates,
+      axisLabel: { color: '#64748b', fontSize: 10, formatter: (v: string) => v.slice(2) },
+      axisLine: { lineStyle: { color: '#1e3a5f' } }
+    },
+    yAxis: {
+      type: 'value', name: 'km²', nameTextStyle: { color: '#64748b', fontSize: 10 },
+      axisLabel: { color: '#64748b', fontSize: 10 },
+      splitLine: { lineStyle: { color: 'rgba(30,58,95,0.6)' } }
+    },
+    series: classes.map((cls) => ({
+      name: classLabel(cls),
+      type: 'bar',
+      stack: 'total',
+      barMaxWidth: 18,
+      itemStyle: { color: CLASS_COLOR[cls] || '#94a3b8' },
+      data: rows.map((r: any) => +(((r.byClass || {})[cls] || 0) / 100).toFixed(2))
+    }))
+  })
+}
+
 
 function onMenu(path: string) {
   router.push(path)
@@ -649,9 +735,12 @@ onMounted(async () => {
       await projectStore.load()
     }
     const pid = projectStore.currentId
-    const [sum, sensorList] = await Promise.all([screenApi.summary(pid), sensorApi.list(pid)])
+    const [sum, sensorList, rsData] = await Promise.all([
+      screenApi.summary(pid), sensorApi.list(pid), screenApi.rsOverview(pid).catch(() => null)
+    ])
     summary.value = sum
     sensors.value = sensorList
+    rs.value = rsData
     addSensors(viewer, sensorList)
     // 视角落到当前项目的传感器中心；没有点位就回默认矿区
     if (sensorList.length > 0) {
@@ -662,8 +751,11 @@ onMounted(async () => {
         orientation: { pitch: -0.72 }
       })
     }
-    // DOM 更新后渲染环图
-    setTimeout(renderDonut, 0)
+    // DOM 更新后再渲染图表（等 v-show 生效，容器才有尺寸）
+    setTimeout(() => {
+      renderClassPie()
+      renderSeries()
+    }, 60)
   } catch (e: any) {
     ElMessage.error(e.message)
   }
@@ -675,6 +767,8 @@ onBeforeUnmount(() => {
   moveHandler?.destroy()
   mHandler?.destroy()
   donut?.dispose()
+  classPie?.dispose()
+  seriesChart?.dispose()
   viewer?.destroy()
   viewer = null
 })
@@ -890,6 +984,30 @@ onBeforeUnmount(() => {
 }
 
 .flex-panel { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+
+.rs-foot {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 8px; margin-top: 6px; font-size: 11px; color: #64748b;
+}
+.acc-badge {
+  padding: 1px 6px; border-radius: 4px; color: #5eead4;
+  background: rgba(20, 184, 166, 0.12); border: 1px solid rgba(20, 184, 166, 0.3);
+}
+.recent-panel { max-height: 216px; }
+.recent-table { display: flex; flex-direction: column; gap: 3px; overflow-y: auto; }
+.recent-row {
+  display: grid; grid-template-columns: 74px 1fr 40px 66px;
+  align-items: center; gap: 6px; font-size: 11px;
+  padding: 3px 4px; border-radius: 4px; background: rgba(30, 58, 95, 0.25);
+}
+.rc-date { color: #7dd3fc; }
+.rc-cls { color: #cbd5e1; }
+.rc-method { text-align: center; border-radius: 3px; font-size: 10px; }
+.m-SUPERVISED { color: #5eead4; background: rgba(20, 184, 166, 0.15); }
+.m-FUSION { color: #fbbf24; background: rgba(251, 191, 36, 0.15); }
+.m-INDEX { color: #93c5fd; background: rgba(59, 130, 246, 0.15); }
+.rc-area { text-align: right; color: #e2e8f0; }
+.recent-empty { font-size: 11px; color: #64748b; text-align: center; padding: 10px 0; }
 
 .panel-title {
   font-size: 14px;
