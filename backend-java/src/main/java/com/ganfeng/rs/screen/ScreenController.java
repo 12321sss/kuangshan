@@ -230,6 +230,129 @@ public class ScreenController {
         return ApiResponse.ok(out);
     }
 
+    /**
+     * 大屏地图图层：最新影像预览 + 最新一期解译矢量
+     *
+     * 单独一个接口、且**不随 5 秒轮询刷新**（预览是 MB 级 base64），前端只在进页面/切项目时取一次。
+     * 矢量要素总量做上限，低配机器（Quadro K2200）一次画几千个面会掉帧。
+     */
+    @GetMapping("/rs-layers")
+    public ApiResponse<Map<String, Object>> rsLayers(@RequestParam long projectId,
+                                                     org.springframework.security.core.Authentication auth) {
+        boolean admin = isAdmin(auth);
+        projectService.requireAccess(projectId, auth.getName(), admin);
+
+        List<Extraction> records = extractionService.list(projectId, auth.getName(), admin);
+
+        // 最新一期（按拍摄日期）
+        java.time.LocalDate latest = null;
+        for (Extraction e : records) {
+            if (e.getAcquisitionDate() != null
+                    && (latest == null || e.getAcquisitionDate().isAfter(latest))) {
+                latest = e.getAcquisitionDate();
+            }
+        }
+
+        // 影像：优先本地高分（UPLOAD 且有文件），取最新一景
+        List<Imagery> imgs = imageryService.list(projectId, null, auth.getName(), admin);
+        // 选「离解译期次最近」的一景：否则会出现 2022 年的影像上叠 2026 年的结果，看着像同一期
+        final java.time.LocalDate target = latest;
+        Imagery pick = imgs.stream()
+                .filter(i -> "UPLOAD".equals(i.getSource()) && i.getFilePath() != null)
+                .min(Comparator.comparingLong(i -> {
+                    if (target == null || i.getAcquisitionDate() == null) return Long.MAX_VALUE / 2;
+                    return Math.abs(java.time.temporal.ChronoUnit.DAYS.between(i.getAcquisitionDate(), target));
+                }))
+                .orElse(null);
+
+        Map<String, Object> imagery = null;
+        if (pick != null && pick.getWest() != null) {
+            Map<String, Object> meta = imageryService.previewOf(pick);
+            imagery = new LinkedHashMap<>();
+            imagery.put("id", pick.getId());
+            imagery.put("name", pick.getName());
+            imagery.put("date", pick.getAcquisitionDate());
+            imagery.put("bounds", meta.get("bounds"));
+            imagery.put("previewBase64", meta.get("previewBase64"));
+            // 与解译期次差超过 30 天就提示前端"不同期"，避免误读
+            boolean samePeriod = pick.getAcquisitionDate() != null && latest != null
+                    && Math.abs(java.time.temporal.ChronoUnit.DAYS.between(pick.getAcquisitionDate(), latest)) <= 30;
+            imagery.put("samePeriod", samePeriod);
+        }
+
+        // 矢量：只取最新一期，按类聚合
+        Map<String, List<Map<String, Object>>> byClass = new LinkedHashMap<>();
+        Map<String, Double> areaByClass = new LinkedHashMap<>();
+        Map<String, Integer> totalByClass = new LinkedHashMap<>();
+        int budget = 1200;
+        if (latest != null) {
+            for (Extraction e : records) {
+                if (e.getAcquisitionDate() == null || !latest.equals(e.getAcquisitionDate())) continue;
+                String cls = e.getClassType() == null ? "UNKNOWN" : e.getClassType();
+                totalByClass.merge(cls, 1, Integer::sum);
+                areaByClass.merge(cls, e.getExtractAreaHa() == null ? 0 : e.getExtractAreaHa(), Double::sum);
+                if (budget <= 0) continue;
+                List<Map<String, Object>> feats = ringsToFeatures(e);
+                if (feats.isEmpty()) continue;
+                if (feats.size() > budget) feats = feats.subList(0, budget);
+                budget -= feats.size();
+                byClass.computeIfAbsent(cls, k -> new ArrayList<>()).addAll(feats);
+            }
+        }
+
+        List<Map<String, Object>> classes = new ArrayList<>();
+        byClass.forEach((cls, feats) -> {
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("classType", cls);
+            m.put("areaHa", round2(areaByClass.getOrDefault(cls, 0.0)));
+            m.put("recordCount", totalByClass.getOrDefault(cls, 0));
+            m.put("featureCount", feats.size());
+            m.put("features", feats);
+            classes.add(m);
+        });
+
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("imagery", imagery);
+        out.put("vectorDate", latest == null ? null : latest.toString());
+        out.put("classes", classes);
+        out.put("truncated", budget <= 0);
+        return ApiResponse.ok(out);
+    }
+
+    /** featuresJson（环数组）→ GeoJSON Polygon 要素，属性带类别 */
+    private List<Map<String, Object>> ringsToFeatures(Extraction e) {
+        List<Map<String, Object>> out = new ArrayList<>();
+        String json = e.getFeaturesJson();
+        if (json == null || json.isBlank()) return out;
+        try {
+            var arr = mapper.readTree(json);
+            if (!arr.isArray()) return out;
+            int i = 0;
+            for (var ring : arr) {
+                if (!ring.isArray() || ring.size() < 3) continue;
+                Map<String, Object> geom = new LinkedHashMap<>();
+                geom.put("type", "Polygon");
+                geom.put("coordinates", List.of(mapper.convertValue(ring, List.class)));
+                Map<String, Object> props = new LinkedHashMap<>();
+                props.put("classType", e.getClassType());
+                props.put("recordId", e.getId());
+                props.put("name", e.getName());
+                props.put("method", e.getMethod() == null ? "INDEX" : e.getMethod());
+                props.put("date", e.getAcquisitionDate() == null ? "-" : e.getAcquisitionDate().toString());
+                props.put("areaHa", e.getExtractAreaHa() == null ? 0 : e.getExtractAreaHa());
+                props.put("index", i++);
+                Map<String, Object> f = new LinkedHashMap<>();
+                f.put("type", "Feature");
+                f.put("properties", props);
+                f.put("geometry", geom);
+                out.add(f);
+            }
+        } catch (Exception ignored) {
+            // 单条几何解析失败不影响其它记录
+        }
+        return out;
+    }
+
     private static double round2(double v) {
         return Math.round(v * 100.0) / 100.0;
     }

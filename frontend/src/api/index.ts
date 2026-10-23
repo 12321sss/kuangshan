@@ -263,6 +263,14 @@ export const analysisApi = {
 }
 
 export const screenApi = {
+  /** 大屏地图图层：最新影像预览 + 最新一期解译矢量（MB 级，不随轮询刷新） */
+  rsLayers: (projectId: number): Promise<any> =>
+    http.get('/screen/rs-layers', { params: { projectId }, timeout: 180000 }),
+
+  /** 大屏地图图层：最新影像预览 + 最新一期解译矢量（MB 级，不随轮询刷新） */
+  rsLayers: (projectId: number): Promise<any> =>
+    http.get('/screen/rs-layers', { params: { projectId }, timeout: 180000 }),
+
   /** 大屏遥感侧聚合：KPI + 地物构成 + 按期时序 + 最近记录 + 分类精度 */
   rsOverview: (projectId: number): Promise<any> =>
     http.get('/screen/rs-overview', { params: { projectId } }),

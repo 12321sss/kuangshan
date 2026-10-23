@@ -116,13 +116,29 @@
 
         <!-- 图例 -->
         <div v-show="toolboxTab === 'legend'" class="tb-body">
+          <div class="tb-section">图层开关</div>
+          <div class="layer-switch" @click="toggleImagery">
+            <i class="sw" :class="{ on: showImagery }"></i><span>最新影像</span>
+          </div>
+          <div class="layer-switch" @click="toggleVector">
+            <i class="sw" :class="{ on: showVector }"></i><span>解译结果（{{ rsLayers?.vectorDate || '无' }}）</span>
+          </div>
+
+          <div v-if="rsLayers?.imagery && !rsLayers.imagery.samePeriod" class="tb-note">
+            影像 {{ rsLayers.imagery.date }} 与解译期次不同期，仅供参照
+          </div>
+
           <div class="tb-section">传感器状态</div>
           <div class="lg-row"><i class="dot" style="background:#22d3ee"></i><span>在线</span></div>
           <div class="lg-row"><i class="dot" style="background:#ef4444"></i><span>告警</span></div>
           <div class="lg-row"><i class="dot" style="background:#64748b"></i><span>离线</span></div>
-          <div class="tb-section">解译要素（示例）</div>
-          <div class="lg-row"><i class="swatch" style="background:rgba(239,68,68,.4)"></i><span>露天采坑</span></div>
-          <div class="lg-row"><i class="swatch" style="background:rgba(245,158,11,.4)"></i><span>排土场</span></div>
+
+          <div class="tb-section">解译要素</div>
+          <div v-for="c in rsLayers?.classes || []" :key="c.classType" class="lg-row">
+            <i class="swatch" :style="{ background: hexA(CLASS_COLOR[c.classType] || '#94a3b8', 0.45) }"></i>
+            <span>{{ classLabel(c.classType) }}</span>
+          </div>
+          <div v-if="!(rsLayers?.classes || []).length" class="tb-note">当前项目暂无解译结果</div>
         </div>
       </div>
     </transition>
@@ -226,6 +242,20 @@
       </div>
     </transition>
 
+    <!-- 解译要素属性卡：点地图直接看这一块是什么、多大、哪期 -->
+    <transition name="fade">
+      <div v-if="picked" class="rs-info">
+        <div class="rs-info-head">
+          <span class="rs-info-title">{{ classLabel(picked.classType) }}</span>
+          <span class="rs-info-close" @click="picked = null">×</span>
+        </div>
+        <div class="rs-info-row"><span>面积</span><b>{{ km2(picked.areaHa) }} km²</b></div>
+        <div class="rs-info-row"><span>影像日期</span><b>{{ picked.date }}</b></div>
+        <div class="rs-info-row"><span>解译方法</span><b>{{ methodLabel(picked.method) }}</b></div>
+        <div class="rs-info-row"><span>记录</span><b class="ellip">{{ picked.name }}</b></div>
+      </div>
+    </transition>
+
     <!-- 底部状态栏（位置信息，可通过工具箱开关） -->
     <footer v-show="showStatusBar" class="status-bar">
       <span>经度: {{ cursor.lng }}</span>
@@ -245,7 +275,8 @@ import { Expand, Fold, Location, Menu, SwitchButton, Tools, Close } from '@eleme
 import {
   Viewer, Cartesian3, Color, ImageryLayer, Entity,
   ScreenSpaceEventHandler, ScreenSpaceEventType, Cartographic, Math as CMath,
-  EllipsoidGeodesic, CallbackProperty, PolygonHierarchy
+  EllipsoidGeodesic, CallbackProperty, PolygonHierarchy,
+  SingleTileImageryProvider, Rectangle
 } from 'cesium'
 import { screenApi, sensorApi } from '@/api'
 import type { ScreenSummary, Sensor, SensorStatus, SensorType } from '@/api/types'
@@ -264,6 +295,14 @@ const donutRef = ref<HTMLDivElement>()
 const classPieRef = ref<HTMLDivElement>()
 const seriesRef = ref<HTMLDivElement>()
 const rs = ref<any>(null)
+const rsLayers = ref<any>(null)
+const showImagery = ref(true)
+const showVector = ref(true)
+/** 点中的解译要素（null = 不显示属性卡） */
+const picked = ref<any>(null)
+let imageryHandle: ImageryLayer | null = null
+const rsEntities: Entity[] = []
+let pickHandler: ScreenSpaceEventHandler | null = null
 const summary = ref<ScreenSummary | null>(null)
 const sensors = ref<Sensor[]>([])
 const leftVisible = ref(true)
@@ -611,6 +650,114 @@ function bindStatusBar(v: Viewer) {
   }, 500)
 }
 
+/** 半透明色：图例色块用 8 位 hex 加 alpha，避免 rgba 字符串拼接出错 */
+function hexA(hex: string, alpha: number) {
+  const a = Math.round(alpha * 255).toString(16).padStart(2, '0')
+  return hex.length === 7 ? hex + a : hex
+}
+
+/** 加载影像预览 + 最新一期解译矢量（只做一次，不进轮询） */
+async function loadRsLayers() {
+  const pid = projectStore.currentId
+  if (!pid || !viewer) return
+  try {
+    const data = await screenApi.rsLayers(pid)
+    rsLayers.value = data
+    if (data?.imagery?.previewBase64 && data.imagery.bounds) {
+      applyImageryLayer(data.imagery)
+    }
+    applyVectorLayer(data?.classes || [])
+    // 有影像就飞到影像范围，没影像但有矢量就飞到矢量范围
+    const b = data?.imagery?.bounds
+    if (b) {
+      viewer.camera.flyTo({
+        destination: Rectangle.fromDegrees(b.west, b.south, b.east, b.north),
+        duration: 1.2
+      })
+    }
+  } catch (e: any) {
+    // 大屏不因图层失败而报错打断，只在控制台留痕
+    console.warn('遥感图层加载失败：', e?.message || e)
+  }
+}
+
+function applyImageryLayer(meta: any) {
+  if (!viewer) return
+  if (imageryHandle) {
+    viewer.imageryLayers.remove(imageryHandle, true)
+    imageryHandle = null
+  }
+  const b = meta.bounds
+  imageryHandle = viewer.imageryLayers.addImageryProvider(
+    new SingleTileImageryProvider({
+      url: 'data:image/png;base64,' + meta.previewBase64,
+      rectangle: Rectangle.fromDegrees(b.west, b.south, b.east, b.north)
+    })
+  )
+  imageryHandle.show = showImagery.value
+}
+
+function applyVectorLayer(classes: any[]) {
+  if (!viewer) return
+  for (const e of rsEntities) viewer.entities.remove(e)
+  rsEntities.length = 0
+
+  for (const c of classes) {
+    const color = Color.fromCssColorString(CLASS_COLOR[c.classType] || '#94a3b8')
+    for (const f of c.features || []) {
+      const ring = f.geometry?.coordinates?.[0]
+      if (!ring || ring.length < 3) continue
+      const ent = viewer.entities.add({
+        polygon: {
+          hierarchy: new PolygonHierarchy(
+            ring.map((p: number[]) => Cartesian3.fromDegrees(p[0], p[1]))
+          ),
+          material: color.withAlpha(0.42),
+          outline: true,
+          outlineColor: color.withAlpha(0.9),
+          // 贴地显示：大屏视角低，抬高会出现"飘在空中"
+          height: 0
+        },
+        properties: f.properties
+      })
+      rsEntities.push(ent)
+    }
+  }
+  rsEntities.forEach((e) => { e.show = showVector.value })
+}
+
+function toggleImagery() {
+  showImagery.value = !showImagery.value
+  if (imageryHandle) imageryHandle.show = showImagery.value
+}
+
+function toggleVector() {
+  showVector.value = !showVector.value
+  rsEntities.forEach((e) => { e.show = showVector.value })
+  if (!showVector.value) picked.value = null
+}
+
+/** 点地图拾取解译要素：只在没在测量时生效，避免和测量抢点击 */
+function bindPick() {
+  if (!viewer) return
+  pickHandler = new ScreenSpaceEventHandler(viewer.scene.canvas)
+  pickHandler.setInputAction((e: ScreenSpaceEventHandler.PositionedEvent) => {
+    if (measureMode.value !== 'none' || !showVector.value) return
+    const pos = viewer!.scene.pick(e.position)
+    const ent = pos?.id as Entity | undefined
+    if (!ent || !ent.properties) {
+      picked.value = null
+      return
+    }
+    try {
+      const p: any = ent.properties.getValue(viewer!.clock.currentTime)
+      picked.value = p || null
+    } catch {
+      picked.value = null
+    }
+  }, ScreenSpaceEventType.LEFT_CLICK)
+}
+
 function renderClassPie() {
   if (!classPieRef.value || !rs.value?.classes?.length) return
   if (!classPie) classPie = echarts.init(classPieRef.value)
@@ -756,6 +903,9 @@ onMounted(async () => {
       renderClassPie()
       renderSeries()
     }, 60)
+    // 图层只在进页面/切项目时取一次（预览图 MB 级，不能进 5 秒轮询）
+    bindPick()
+    loadRsLayers()
   } catch (e: any) {
     ElMessage.error(e.message)
   }
@@ -765,6 +915,7 @@ onBeforeUnmount(() => {
   if (clockTimer) clearInterval(clockTimer)
   if (statusTimer) clearInterval(statusTimer)
   moveHandler?.destroy()
+  pickHandler?.destroy()
   mHandler?.destroy()
   donut?.dispose()
   classPie?.dispose()
@@ -984,6 +1135,37 @@ onBeforeUnmount(() => {
 }
 
 .flex-panel { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+
+.layer-switch {
+  display: flex; align-items: center; gap: 8px; padding: 4px 2px;
+  font-size: 12px; color: #cbd5e1; cursor: pointer;
+}
+.layer-switch .sw {
+  width: 26px; height: 14px; border-radius: 7px; background: #1e3a5f;
+  position: relative; transition: background .15s;
+}
+.layer-switch .sw::after {
+  content: ''; position: absolute; top: 2px; left: 2px;
+  width: 10px; height: 10px; border-radius: 50%; background: #64748b;
+  transition: left .15s, background .15s;
+}
+.layer-switch .sw.on { background: rgba(34, 211, 238, .35); }
+.layer-switch .sw.on::after { left: 14px; background: #22d3ee; }
+
+.rs-info {
+  position: absolute; right: 300px; bottom: 64px; z-index: 12;
+  width: 220px; padding: 10px 12px; border-radius: 8px;
+  background: rgba(6, 28, 46, 0.92);
+  border: 1px solid rgba(56, 189, 248, 0.35);
+  backdrop-filter: blur(6px); font-size: 12px; color: #cbd5e1;
+}
+.rs-info-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
+.rs-info-title { color: #5eead4; font-weight: 600; }
+.rs-info-close { cursor: pointer; color: #64748b; font-size: 14px; line-height: 1; }
+.rs-info-row { display: flex; justify-content: space-between; gap: 8px; padding: 2px 0; }
+.rs-info-row span { color: #64748b; }
+.rs-info-row b { color: #e2e8f0; font-weight: 500; }
+.ellip { max-width: 130px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 .rs-foot {
   display: flex; align-items: center; justify-content: space-between;
