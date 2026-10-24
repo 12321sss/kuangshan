@@ -5,6 +5,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
+import java.util.Set;
 
 /**
  * 角色服务（MySQL 持久化）：页面权限点 + 操作权限点两组清单
@@ -52,8 +53,12 @@ public class RoleStore {
             throw BizException.badRequest("角色编码已存在: " + req.getCode());
         }
         validatePerms(req.getPagePerms(), req.getActionPerms());
-        return repo.save(new Role(req.getCode(), req.getName(), req.getDescription(),
-                req.getPagePerms(), req.getActionPerms(), false));
+        validateScope(req.getProjectScope());
+        Role r = new Role(req.getCode(), req.getName(), req.getDescription(),
+                req.getPagePerms(), req.getActionPerms(), false);
+        r.setProjectScope(normalizeScope(req.getProjectScope()));
+        r.setProjectIds(req.getProjectIds() == null ? List.of() : req.getProjectIds());
+        return repo.save(r);
     }
 
     @Transactional
@@ -67,6 +72,10 @@ public class RoleStore {
         existing.setDescription(req.getDescription());
         existing.setPagePerms(req.getPagePerms());
         existing.setActionPerms(req.getActionPerms());
+        // 项目可见范围（2026-10-24）：与页面/操作权限一起保存
+        validateScope(req.getProjectScope());
+        existing.setProjectScope(normalizeScope(req.getProjectScope()));
+        existing.setProjectIds(req.getProjectIds() == null ? List.of() : req.getProjectIds());
         return repo.save(existing);
     }
 
@@ -77,6 +86,18 @@ public class RoleStore {
             throw BizException.badRequest("内置角色不允许删除");
         }
         repo.delete(existing);
+    }
+
+    /** 项目范围取值校验：只允许 ALL / SPECIFIC / NONE */
+    private void validateScope(String scope) {
+        if (scope == null || scope.isBlank()) return;
+        if (!Set.of("ALL", "SPECIFIC", "NONE").contains(scope)) {
+            throw BizException.badRequest("非法项目范围: " + scope + "（只允许 ALL / SPECIFIC / NONE）");
+        }
+    }
+
+    private String normalizeScope(String scope) {
+        return (scope == null || scope.isBlank()) ? "NONE" : scope;
     }
 
     private void validatePerms(List<String> pagePerms, List<String> actionPerms) {

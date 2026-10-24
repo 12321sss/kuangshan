@@ -184,6 +184,10 @@ export interface Role {
   pagePerms: string[]
   actionPerms: string[]
   builtin: boolean
+  /** 项目可见范围：ALL 全部 / SPECIFIC 指定 / NONE 仅按个人成员（2026-10-24 新增） */
+  projectScope?: 'ALL' | 'SPECIFIC' | 'NONE'
+  /** projectScope=SPECIFIC 时生效的项目 id 列表 */
+  projectIds?: string[]
 }
 
 export interface PermItem {

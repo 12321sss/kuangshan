@@ -16,6 +16,26 @@
       <el-table-column label="操作权限" width="120">
         <template #default="{ row }">{{ row.actionPerms.length }} 项</template>
       </el-table-column>
+      <!-- 可见项目：让管理员一眼看清该角色能看哪些矿区，不用点进编辑才发现没配 -->
+      <el-table-column label="可见项目" width="140">
+        <template #default="{ row }">
+          <el-tag v-if="row.projectScope === 'ALL'" type="success" size="small" effect="plain">全部</el-tag>
+          <el-tag v-else-if="row.projectScope === 'SPECIFIC'" type="primary" size="small" effect="plain">
+            {{ (row.projectIds || []).length }} 个
+          </el-tag>
+          <el-tag v-else type="danger" size="small" effect="plain">未配置</el-tag>
+        </template>
+      </el-table-column>
+      <!-- 可见项目：让管理员一眼看清该角色能看哪些矿区，不用点进编辑才发现没配 -->
+      <el-table-column label="可见项目" width="140">
+        <template #default="{ row }">
+          <el-tag v-if="row.projectScope === 'ALL'" type="success" size="small" effect="plain">全部</el-tag>
+          <el-tag v-else-if="row.projectScope === 'SPECIFIC'" type="primary" size="small" effect="plain">
+            {{ (row.projectIds || []).length }} 个
+          </el-tag>
+          <el-tag v-else type="danger" size="small" effect="plain">未配置</el-tag>
+        </template>
+      </el-table-column>
       <el-table-column label="类型" width="90">
         <template #default="{ row }">
           <el-tag :type="row.builtin ? 'info' : 'success'" size="small" effect="plain">{{ row.builtin ? '内置' : '自定义' }}</el-tag>
@@ -96,6 +116,28 @@
             </el-checkbox-group>
           </div>
         </el-form-item>
+
+        <!-- 项目可见范围：解决「新建角色的用户登录后一个项目都看不到」的问题 -->
+        <el-form-item label="可见项目">
+          <div class="perm-box scope-box">
+            <el-radio-group v-model="scopeMode">
+              <el-radio value="ALL">全部项目</el-radio>
+              <el-radio value="SPECIFIC">指定项目</el-radio>
+              <el-radio value="NONE">仅按个人成员</el-radio>
+            </el-radio-group>
+            <div v-if="scopeMode === 'SPECIFIC'" class="scope-project-list">
+              <el-checkbox-group v-model="editing.projectIds">
+                <el-checkbox v-for="p in projects" :key="p.id" :value="String(p.id)" class="perm-item">
+                  {{ p.name }}
+                </el-checkbox>
+              </el-checkbox-group>
+              <div v-if="!projects.length" class="scope-empty">还没有项目，请先到「项目管理」新建</div>
+            </div>
+            <div class="scope-tip">
+              {{ scopeTip }}
+            </div>
+          </div>
+        </el-form-item>
       </el-form>
       <template #footer>
         <el-button @click="dialogVisible = false">取消</el-button>
@@ -109,7 +151,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Plus } from '@element-plus/icons-vue'
-import { roleApi } from '@/api'
+import { roleApi, projectApi } from '@/api'
 import { useAuthStore } from '@/stores/auth'
 import type { PermCatalog, Role } from '@/api/types'
 
@@ -123,7 +165,30 @@ const dialogVisible = ref(false)
 const isCreate = ref(false)
 const editing = ref<{
   code: string; name: string; description: string; pagePerms: string[]; actionPerms: string[]
+  projectScope: 'ALL' | 'SPECIFIC' | 'NONE'; projectIds: string[]
 } | null>(null)
+
+/** 项目清单：供「可见项目」勾选 */
+const projects = ref<{ id: number; name: string }[]>([])
+const scopeMode = computed({
+  // radio-group 要 v-model 绑定，必须是可写 computed
+  get: () => editing.value?.projectScope || 'NONE',
+  set: (v: 'ALL' | 'SPECIFIC' | 'NONE') => {
+    if (!editing.value) return
+    editing.value.projectScope = v
+    if (v !== 'SPECIFIC') editing.value.projectIds = []
+  }
+})
+const scopeTip = computed(() => {
+  if (scopeMode.value === 'ALL') return '该角色下所有用户都能看到全部项目（相当于管理员级数据权限）'
+  if (scopeMode.value === 'SPECIFIC') {
+    const n = editing.value?.projectIds?.length || 0
+    return n ? `该角色下所有用户可看到勾选的 ${n} 个项目；个人成员关系仍可额外补充` : '请至少勾选一个项目，否则该角色看不到任何项目'
+  }
+  return '不预设项目，用户必须被加入「项目管理 → 成员」才能看到对应项目'
+})
+
+
 
 const allPagesChecked = computed(() =>
   !!catalog.value && editing.value?.pagePerms.length === catalog.value.pages.length
@@ -188,7 +253,14 @@ function toggleAllActions(v: boolean) {
 async function load() {
   loading.value = true
   try {
-    ;[roles.value, catalog.value] = await Promise.all([roleApi.list(), roleApi.catalog()])
+    const [r, c, ps] = await Promise.all([
+      roleApi.list(),
+      roleApi.catalog(),
+      projectApi.list().catch(() => [])
+    ])
+    roles.value = r
+    catalog.value = c
+    projects.value = (ps || []).map((p: any) => ({ id: p.id, name: p.name }))
   } catch (e: any) {
     ElMessage.error(e.message)
   } finally {
@@ -198,7 +270,11 @@ async function load() {
 
 function onCreate() {
   isCreate.value = true
-  editing.value = { code: '', name: '', description: '', pagePerms: ['page:dashboard'], actionPerms: [] }
+  editing.value = {
+    code: '', name: '', description: '',
+    pagePerms: ['page:dashboard'], actionPerms: [],
+    projectScope: 'SPECIFIC', projectIds: []
+  }
   dialogVisible.value = true
 }
 
@@ -215,6 +291,11 @@ async function onSave() {
   const e = editing.value
   if (!e?.code || !e.name) {
     ElMessage.warning('角色编码和名称不能为空')
+    return
+  }
+  // 指定项目但一个都没勾，等于该角色看不到任何项目——提前拦下，避免保存后才发现
+  if (e.projectScope === 'SPECIFIC' && !(e.projectIds || []).length) {
+    ElMessage.warning('「可见项目」选了「指定项目」但一个都没勾，请至少选一个')
     return
   }
   saving.value = true
@@ -269,4 +350,11 @@ onMounted(load)
   padding: 4px 0 2px; border-bottom: 1px dashed #eceef2; margin-bottom: 4px;
 }
 .perm-group-items { display: flex; flex-wrap: wrap; gap: 2px 12px; padding-left: 6px; }
+.scope-box { display: flex; flex-direction: column; gap: 8px; }
+.scope-project-list {
+  padding: 6px 8px; border: 1px dashed #d9e0ea; border-radius: 6px;
+  display: flex; flex-wrap: wrap; gap: 2px 12px;
+}
+.scope-empty { font-size: 12px; color: #a9aeb8; }
+.scope-tip { font-size: 11px; color: #86909c; line-height: 1.5; }
 </style>
