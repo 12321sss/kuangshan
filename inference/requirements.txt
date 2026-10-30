@@ -32,6 +32,8 @@ tifffile==2026.10.15
 # Pillow：影像预览、坡度专题图、融合底图、分类专题图的 PNG 编码
 # （此前漏声明，全新环境装完会在预览/出图处才报 ModuleNotFoundError）
 Pillow==13.0.0
+# h5py：读 NISAR GUNW 的 HDF5 产品（形变时序 SBAS / 20m 解缠的数据入口）
+h5py==3.16.0
 
 # ---- 边界解析与监督分类 ----
 # pyshp：纯 Python 读 SHP/SHX/DBF，无需 GDAL 绑定

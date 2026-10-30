@@ -632,6 +632,8 @@ def evaluate(payload: dict[str, Any]) -> dict[str, Any]:
       trend             时序趋势（扩张速率等）
       withGrid          是否生成风险栅格图与热点（默认 true，需读 DEM）
       zoom              DEM 放大级别（默认 14）
+      deformation       形变证据（可选）：{velocityMmyr, accelerationMmyr2, reliable}
+                        有则做规则覆盖提级，无则跳过
     """
     from shapely.ops import unary_union
 
@@ -640,6 +642,7 @@ def evaluate(payload: dict[str, Any]) -> dict[str, Any]:
     classes_payload = payload.get("classes") or []
     trend = payload.get("trend")
     pond_pct = float(payload.get("pondPct") or 0)
+    deformation = payload.get("deformation")
 
     if len(aoi) < 3:
         raise ValueError("分析区环至少需要 3 个点")
@@ -785,6 +788,28 @@ def evaluate(payload: dict[str, Any]) -> dict[str, Any]:
 
     label, color = _level_of(total)
 
+    # ---- 形变证据的规则覆盖（直接证据提级，不参与六维 AHP 加权）----
+    # 形变是「坡体确实在动」的直接证据，做规则覆盖而不是第七维：
+    # 只抬升不稀释，且不改动六维口径，历史数据可比。
+    deformation_payload: dict[str, Any] = {}
+    if deformation:
+        from .deformation_risk import deformation_overlay
+
+        overlay = deformation_overlay(
+            total,
+            deformation.get("velocityMmyr"),
+            deformation.get("accelerationMmyr2"),
+            reliable=deformation.get("reliable", True),
+        )
+        total = overlay["adjusted_score"]
+        label, color = _level_of(total)
+        deformation_payload = {
+            "applied": overlay["applied"],
+            "reliable": overlay["reliable"],
+            "uplift": overlay["uplift"],
+            "evidence": overlay["evidence"],
+        }
+
     # 面积自检：矢量化存在边界阶梯效应，各类面积之和可能略超分析区；
     # 若明显超出（>5%）说明类别间存在重叠或投影误差，必须提示而不是隐藏
     sum_by_class = sum(class_area_ha.values())
@@ -809,6 +834,7 @@ def evaluate(payload: dict[str, Any]) -> dict[str, Any]:
             "safetyIndex": _r(100.0 - total, 1),
             "safetyLevel": _safety_level(100.0 - total),
         },
+        "deformation": deformation_payload if deformation_payload else None,
         "encroachment": encroach,
         "terrain": terrain,
         "areaSummary": {

@@ -31,6 +31,10 @@ class RiskRequest(BaseModel):
     # 新增入参字段时必须同步在模型里声明
     slopeUnits: list[dict] = Field(default_factory=list, alias="slopeUnits",
                                    description="边坡单元列表（用于形态维度最差聚合）")
+    # 形变证据（可选）：{velocityMmyr, accelerationMmyr2, reliable}
+    # 由形变时序分析得到，做规则覆盖提级（直接证据，不参与六维 AHP 加权）
+    # 注意：Pydantic 会丢弃未声明字段，漏写会导致形变证据静默失效
+    deformation: dict | None = Field(None, description="形变证据（速度/加速度/可信度）")
     withGrid: bool = Field(True, alias="withGrid", description="是否生成风险栅格图与热点")
     zoom: int = Field(14, description="DEM 放大级别")
 
@@ -49,6 +53,7 @@ def risk_evaluate(req: RiskRequest):
             "trend": req.trend,
             "rsei": req.rsei,
             "slopeUnits": req.slopeUnits,
+            "deformation": req.deformation,
             "withGrid": req.withGrid,
             "zoom": max(10, min(req.zoom, 15)),
         })

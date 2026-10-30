@@ -130,13 +130,15 @@ def generate_report(data: dict) -> bytes:
     safety = data.get("safety")
     if safety and safety.get("available") and safety.get("score"):
         _add_safety_section(doc, safety)
+        # 形变监测：安全评估的直接证据补充（有数据才写）
+        deformation = safety.get("deformation")
+        if deformation:
+            _add_deformation_section(doc, deformation)
 
     # ---- 七、传感器监测概况 ----
     _add_heading(doc, "七、传感器监测概况", level=1)
     _add_kv(doc, "在线设备数", str(data.get("sensorOnline", 0)))
     _add_kv(doc, "未处理告警数", str(data.get("sensorAlarm", 0)))
-
-    _add_extraction_appendix(doc, data.get("extractions") or [])
 
     _add_extraction_appendix(doc, data.get("extractions") or [])
 
@@ -162,56 +164,6 @@ CLASS_LABEL = {
     "ROAD": "道路设施", "VEGETATION": "植被", "WATER": "水体",
     "BUILDING": "建筑", "MOUNTAIN": "山体",
 }
-
-
-def _add_extraction_appendix(doc: Document, extractions: list[dict]) -> None:
-    """附录：解译成果明细 + 分类精度
-
-    为什么单独做附录：正文的时序/构成是聚合口径，客户核对时想看"每条记录什么时候、
-    什么方法、多少面积"，这些明细放正文会淹没结论，放附录正好。
-    """
-    _add_heading(doc, "九、附录：遥感解译成果明细", level=1)
-    if not extractions:
-        doc.add_paragraph("当前项目暂无解译记录。")
-        return
-
-    doc.add_paragraph(f"共 {len(extractions)} 条解译记录（按下表逐条列示，便于复核）。")
-    table = doc.add_table(rows=1, cols=6)
-    table.style = "Light Grid Accent 1"
-    hdr = table.rows[0].cells
-    for i, t in enumerate(["影像日期", "地物类型", "解译方法", "面积(km²)", "覆盖率", "数据源"]):
-        hdr[i].text = t
-    for e in extractions[:120]:
-        cells = table.add_row().cells
-        cells[0].text = str(e.get("acquisitionDate") or "-")
-        cells[1].text = CLASS_LABEL.get(str(e.get("classType")), str(e.get("classType") or "-"))
-        cells[2].text = METHOD_LABEL.get(str(e.get("method") or "INDEX"), str(e.get("method") or "INDEX"))
-        cells[3].text = f"{(e.get('extractAreaHa') or 0) / 100:.2f}"
-        cells[4].text = f"{e.get('coveragePct') or 0:.1f}%"
-        cells[5].text = str(e.get("satellite") or "-")
-    if len(extractions) > 120:
-        doc.add_paragraph(f"（仅列示前 120 条，其余 {len(extractions) - 120} 条见系统记录）")
-
-    # 分类精度：取最近一条带 accuracyJson 的监督分类记录
-    acc = None
-    for e in extractions:
-        raw = e.get("accuracyJson")
-        if e.get("method") == "SUPERVISED" and raw:
-            try:
-                acc = json.loads(raw)
-                break
-            except Exception:  # noqa: BLE001
-                continue
-    if acc:
-        _add_heading(doc, "9.1 监督分类精度", level=2)
-        _add_kv(doc, "总体精度 OA", f"{acc.get('overallAccuracy', '-')}%")
-        _add_kv(doc, "Kappa 系数", str(acc.get("kappa", "-")))
-        _add_kv(doc, "样本/验证", f"{acc.get('sampleCount', '-')} / {acc.get('split', '-')}")
-        _add_note(doc, "精度指标只对本次分析的影像与 AOI 有效，不代表其它矿区或其它时相。")
-
-    _add_note(doc,
-              "上表面积均为「潜在水土流失/扰动风险筛查」口径的影像解译结果，"
-              "不是实测侵蚀量，也不构成储量或品位数据。")
 
 
 METHOD_LABEL = {"INDEX": "指数阈值法", "SUPERVISED": "监督分类", "FUSION": "分类融合"}
@@ -402,4 +354,54 @@ def _add_safety_section(doc: Document, safety: dict) -> None:
         _add_note(doc, "本次未发现超过阈值的连片高风险区域。")
 
     _add_note(doc, str(safety.get("disclaimer") or ""))
+
+
+def _add_deformation_section(doc: Document, deformation: dict) -> None:
+    """形变监测章节（作为安全评估的直接证据补充）。
+
+    口径：形变是「坡体确实在动」的直接证据，与六维间接指标互补。
+    信噪比不足时必须在报告里如实标注「仅供参考」，不把噪声当形变。
+    """
+    _add_heading(doc, "6.1 地表形变监测", level=2)
+
+    velocity = deformation.get("velocity")
+    accel = deformation.get("acceleration")
+    reliable = deformation.get("reliable", True)
+    source = deformation.get("source", "-")
+
+    _add_kv(doc, "数据来源", str(source))
+    _add_kv(doc, "最大形变速率", f"{velocity} mm/yr" if velocity is not None else "无数据")
+    _add_kv(doc, "形变加速度", f"{accel} mm/yr²" if accel is not None else "无数据")
+    _add_kv(doc, "数据可信度", "可靠" if reliable else "信噪比不足（仅供参考）")
+
+    if not reliable:
+        _add_note(doc, "本次形变时序信噪比不足（观测期过短或未充分大气校正），"
+                       "速率/加速度仅供趋势参考，不作为风险提级与失稳判定的依据。")
+
+    # 速度分级
+    if velocity is not None:
+        v = abs(float(velocity))
+        if v < 10:
+            level = "极缓慢"
+        elif v < 30:
+            level = "缓慢"
+        elif v < 100:
+            level = "中等"
+        elif v < 300:
+            level = "快速"
+        else:
+            level = "极快速"
+        _add_kv(doc, "速度分级", level + "（参考 Cruden & Varnes 1996）")
+
+    # 失稳外推
+    tf_days = deformation.get("forecastDays")
+    if tf_days is not None:
+        _add_note(doc, f"倒数速度法外推：按当前加速趋势，预计 {tf_days:.0f} 天后可能失稳"
+                       f"（Fukuzono 法，仅作预警参考，需现场复核）")
+
+    if deformation.get("uplift"):
+        _add_note(doc, f"形变证据已触发风险提级：{deformation.get('uplift')} 级。")
+
+    _add_note(doc, "形变监测输出为「潜在形变风险筛查」，单轨结果为视线向(LOS)位移，"
+                   "不等于垂直沉降；判定需结合边坡单元、现场勘察与多源数据复核。")
 

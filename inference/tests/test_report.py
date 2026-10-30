@@ -53,3 +53,41 @@ def test_report_appendix_lists_extractions(client):
     base_size = len(base["docx_base64"])
     full_size = len(with_extra["docx_base64"])
     assert full_size > base_size, "附录章节没有写进报告"
+
+
+def test_report_deformation_section(client):
+    """形变证据应写进报告的 6.1 章节"""
+    resp = client.post("/api/v1/report/generate", json={
+        "projectName": "形变测试",
+        "safety": {
+            "available": True,
+            "score": {"total": 55, "level": "中", "dimensions": []},
+            "deformation": {
+                "source": "NISAR", "velocity": 45.0, "acceleration": 12.0,
+                "reliable": True, "forecastDays": 180, "uplift": 1,
+            },
+        },
+    })
+    assert resp.status_code == 200, resp.text
+    # 产物是 docx，正文含形变关键词（解压 XML 检查）
+    import base64, zipfile, io
+    raw = base64.b64decode(resp.json()["data"]["docx_base64"])
+    z = zipfile.ZipFile(io.BytesIO(raw))
+    xml = z.read("word/document.xml").decode("utf-8")
+    assert "地表形变监测" in xml
+    assert "45.0 mm/yr" in xml or "45.0" in xml
+    assert "风险提级" in xml
+
+
+def test_report_no_duplicate_appendix(client):
+    """附录章节只应出现一次（修复历史重复调用 bug）"""
+    import base64, zipfile, io
+    resp = client.post("/api/v1/report/generate", json={
+        "projectName": "重复检查",
+        "extractions": [{"acquisitionDate": "2026-09-27", "classType": "WATER",
+                         "method": "INDEX", "extractAreaHa": 100, "coveragePct": 10}],
+    })
+    raw = base64.b64decode(resp.json()["data"]["docx_base64"])
+    z = zipfile.ZipFile(io.BytesIO(raw))
+    xml = z.read("word/document.xml").decode("utf-8")
+    assert xml.count("九、附录") == 1

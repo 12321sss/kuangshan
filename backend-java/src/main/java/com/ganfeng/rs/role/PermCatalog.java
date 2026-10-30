@@ -62,6 +62,7 @@ public final class PermCatalog {
             p("page:spatial", "空间关系", "安全与生态评估"),
             p("page:terrain", "地形分析", "安全与生态评估"),
             p("page:ecology", "生态指数", "安全与生态评估"),
+            p("page:deformation", "形变监测", "安全与生态评估"),
 
             // 成果输出
             p("page:report", "报告生成", "成果输出"),
@@ -92,6 +93,7 @@ public final class PermCatalog {
             p("action:safety-evaluate", "执行安全评估", "安全与生态评估"),
             p("action:ecology-evaluate", "计算生态指数", "安全与生态评估"),
             p("action:terrain-analyze", "地形分析", "安全与生态评估"),
+            p("action:deformation-manage", "形变数据导入/删除", "安全与生态评估"),
 
             // 成果输出
             p("action:report-generate", "生成/下载报告", "成果输出"),
