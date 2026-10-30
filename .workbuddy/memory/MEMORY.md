@@ -21,8 +21,13 @@
 暂无商业影像。demo 用 Sentinel-2 公开时序（首选样区：宁都河源，江西本地）。候选矿区：Goulamina（马里）、Mount Marion、Pilgangoora（澳大利亚）、宁都河源（条件样区）；松树岗不默认纳入。
 
 ## 环境备注
-## 环境备注（2026-10-16 换机后重校，以此为准）
-- **本机无 D 盘、无管理员权限、无 Docker**。原记录的 D:\Dev 全系列绿色版在本机不存在。
+## 环境备注（2026-10-30 重校，以此为准）
+- **Windows 11 家庭版 Build 26200 / 内存 31.3GB / C 盘可用 415GB / 有管理员权限**
+  （2026-10-16 记的「16GB、无管理员权限」已过时，不要再引用）
+- 无 D 盘、无 Docker。原记录的 D://Dev 全系列绿色版在本机不存在。
+- **WSL：Microsoft-Windows-Subsystem-Linux 为 Disabled，且 wsl.exe 被 WorkBuddy
+  安全中心程序黑名单拦截**（需界面放行，命令层无法绕过）。VirtualMachinePlatform
+  已启用、CPU 虚拟化已开。详见 docs/27-WSL与snaphu部署指南.md
 - JDK 17：`C:\Java17\jdk-17.0.2`（PATH 默认仍是 JDK 8，Maven 必须显式指定 JAVA_HOME）
 - Maven 3.9.9：`C:\dev\apache-maven-3.9.9`（settings.xml 已配华为云镜像；下载源用 repo.huaweicloud.com，archive.apache.org 极慢）
 - MySQL 8.0.28：`C:\dev\mysql-8.0.28-winx64`（root/root，库 rs_platform，utf8mb4）
