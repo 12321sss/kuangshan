@@ -9,9 +9,19 @@
 isce-framework/snaphu-py）做解缠。它是工业级解缠器，与 NISAR 同属
 NASA/isce 生态。
 
-**平台约束**：snaphu 官方只支持 linux|macos（纯 C 项目，需编译器），
-本机 Windows 无法安装。因此本模块只做「数据准备 + 结果读取」，
-真正的解缠调用放在 `scripts/unwrap_linux.py`，在 Linux 上执行。
+**平台约束与两条后端**（2026-10-30 补充）：
+
+  | 后端 | 依赖 | 平台 | 质量 |
+  |---|---|---|---|
+  | `snaphu` | snaphu-py（纯 C，需编译器） | **仅 Linux/macOS** | 工业级，statistical-cost network-flow |
+  | `python` | scikit-image（有 cp313 预编译轮子） | **Windows / Linux / macOS** | 2D Herráez 方法，AOI 小时可用 |
+
+原先只有 snaphu 一条路，Windows 完全跑不了 20m 解缠（C 阶段卡死）。
+现新增 `unwrap_python`：用 `skimage.restoration.unwrap_phase` 的 **masked array** 能力，
+无效像元（低相干 / mask=0）既不参与解缠也不污染邻域，产出与 snaphu 同口径的
+`unwrapped_phase.tif` / `los_disp_mm.tif`，平台侧完全不用改。
+
+选中逻辑见 `unwrap_auto`：有 snaphu 用 snaphu，否则自动退回 python，两条路产物格式一致。
 
 本模块职责（纯 Python，可单测）：
   1. read_wrapped：从 GUNW 读 20m 复数干涉图 + 相干性 + mask
@@ -111,3 +121,68 @@ def read_unwrapped_phase(path: Path) -> np.ndarray:
     # 实际 snaphu-py 返回 numpy 数组，不经文件；此函数为「独立 snaphu 可执行
     # 文件输出」场景预留。当前主路径用 snaphu-py 的 Python API 直接拿数组。
     return data
+
+# ---------------------------------------------------------------------------
+# 解缠后端
+# ---------------------------------------------------------------------------
+
+def unwrap_python(phase: np.ndarray, corr: np.ndarray,
+                  coh_min: float = 0.05) -> np.ndarray:
+    """纯 Python 解缠（Windows 可用），不依赖 snaphu 二进制。
+
+    用 `skimage.restoration.unwrap_phase`（Herráez 2D 方法）。它的 masked array
+    语义正好符合需求：被 mask 的像元**不参与解缠、也不影响邻域**，
+    因此低相干区（水体、植被遮挡、叠掩）不会把噪声扩散到整个 AOI。
+
+    参数
+    ----
+    phase  : 缠绕相位（弧度，[-π,π)，NaN 表示无效）
+    corr   : 相关性 0~1（越低越不可信）
+    coh_min: 相干性阈值，低于此值视为无效（默认 0.05，仅剔除近乎全噪的像元）
+
+    返回
+    ----
+    解缠相位（弧度，float32），无效处为 NaN
+
+    局限
+    ----
+    Herráez 是全局最小二乘类方法，对**大范围强噪声**不如 snaphu 的
+    network-flow 稳健。AOI 在几十 km² 内、相干性尚可时误差可接受；
+    若做整景或长时序，仍应上 Linux 用 snaphu。
+    """
+    from skimage.restoration import unwrap_phase
+
+    if phase.size == 0:
+        return phase.astype(np.float32)
+
+    invalid = (~np.isfinite(phase)) | (~np.isfinite(corr)) | (corr < coh_min)
+    if invalid.all():
+        # 全无效：没有什么可解缠的
+        return np.full(phase.shape, np.nan, dtype=np.float32)
+
+    data = np.where(invalid, 0.0, phase)
+    masked = np.ma.array(data, mask=invalid)
+    out = unwrap_phase(masked)
+    arr = np.asarray(np.ma.filled(out, np.nan), dtype=np.float32)
+    arr[invalid] = np.nan
+    return arr
+
+
+def unwrap_auto(phase: np.ndarray, corr: np.ndarray,
+                coh_min: float = 0.05) -> tuple[np.ndarray, str]:
+    """按环境自动选后端：有 snaphu 用 snaphu，否则用纯 Python。
+
+    返回 (解缠相位, 实际使用的后端名)，后端名用于日志与产物元数据，
+    方便事后追溯这批 20m 结果是哪个解缠器出的。
+    """
+    try:
+        import snaphu  # 仅在 Linux/macOS 装得上
+
+        nan_mask = ~np.isfinite(phase) | ~np.isfinite(corr)
+        ph = np.where(nan_mask, 0.0, phase)
+        co = np.where(nan_mask, 1e-6, np.clip(corr, 0, 1))
+        unw = snaphu.unwrap(ph, co, nlooks=1.0, verbose=False).astype(np.float64)
+        unw[nan_mask] = np.nan
+        return unw, "snaphu"
+    except Exception:
+        return unwrap_python(phase, corr, coh_min=coh_min), "python"

@@ -39,6 +39,13 @@ h5py==3.16.0
 # pyshp：纯 Python 读 SHP/SHX/DBF，无需 GDAL 绑定
 pyshp==3.1.6
 scikit-learn==1.9.1
+# scikit-image：20m 相位解缠的纯 Python 后端（skimage.restoration.unwrap_phase）
+# 为什么需要：snaphu 是纯 C 项目，官方只发 linux/macos 轮子，Windows 装不上，
+#             导致 C 阶段（20m 解缠）在 Windows 完全做不了。
+#             scikit-image 有 cp313 预编译轮子，Windows 直接可用，
+#             它的 masked array 语义还能让低相干区不污染邻域。
+#             代价是精度略逊于 snaphu 的 network-flow，AOI 小、相干性好时够用。
+scikit-image==0.26.0
 scipy==1.18.1
 
 # ---- 报告导出 ----
