@@ -175,14 +175,28 @@ def unwrap_auto(phase: np.ndarray, corr: np.ndarray,
     返回 (解缠相位, 实际使用的后端名)，后端名用于日志与产物元数据，
     方便事后追溯这批 20m 结果是哪个解缠器出的。
     """
+    # 只把「导入」放进 try：import 失败说明这台机器没有 snaphu（Windows 正常情况），
+    # 退回纯 Python 是合理降级。
     try:
-        import snaphu  # 仅在 Linux/macOS 装得上
-
-        nan_mask = ~np.isfinite(phase) | ~np.isfinite(corr)
-        ph = np.where(nan_mask, 0.0, phase)
-        co = np.where(nan_mask, 1e-6, np.clip(corr, 0, 1))
-        unw = snaphu.unwrap(ph, co, nlooks=1.0, verbose=False).astype(np.float64)
-        unw[nan_mask] = np.nan
-        return unw, "snaphu"
-    except Exception:
+        import snaphu  # noqa: F401
+    except ImportError:
         return unwrap_python(phase, corr, coh_min=coh_min), "python"
+
+    # 导入成功就一定要用 snaphu。调用失败必须显式抛出，不能静默降级——
+    # 曾经的坑：把 snaphu.unwrap() 也包进 try，底层二进制缺失时抛异常被捕获，
+    # 上层误报「当前环境没有 snaphu」，把「包装好了但二进制没装」误诊成「没装包」。
+    # snaphu-py 0.4.1 的真实接口（实测确认，与旧文档不符）：
+    #   1) igram 必须是【复数】干涉图，不是实相位 —— 传 float 会 TypeError
+    #   2) 没有 verbose 参数（nlooks 是第 3 个位置参数）
+    #   3) 返回 (unw, conncomp) 元组，元素可直接当 ndarray 切片
+    # 无效像元填充后参与解缠，结果再还原 NaN（snaphu 不接受 NaN 输入）
+    nan_mask = ~np.isfinite(phase) | ~np.isfinite(corr)
+    ph = np.where(nan_mask, 0.0, phase)
+    co = np.where(nan_mask, 1e-6, np.clip(corr, 0, 1))
+
+    igram = np.exp(1j * ph).astype(np.complex64)
+    res = snaphu.unwrap(igram, co, 1.0)          # 1.0 = nlooks
+    unw_ds = res[0] if isinstance(res, tuple) else res
+    unw = np.asarray(unw_ds[...]).astype(np.float64)
+    unw[nan_mask] = np.nan
+    return unw, "snaphu"

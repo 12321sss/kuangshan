@@ -82,7 +82,9 @@ if ! sudo apt-get update -qq; then
 fi
 
 # build-essential：snaphu 纯 C 项目，没 gcc/make 装不上
-PKGS="python3 python3-pip python3-venv build-essential"
+# snaphu：底层 C 解缠器。pip 装的 snaphu 只是 Python 包装，
+# 真正干活的是系统里的 /usr/bin/snaphu，两者缺一不可（曾经只装 pip 包导致误判"未安装"）
+PKGS="python3 python3-pip python3-venv build-essential snaphu"
 MISSING=""
 for p in $PKGS; do
     dpkg -s "$p" >/dev/null 2>&1 || MISSING="$MISSING $p"
@@ -118,9 +120,19 @@ PIP_MIRROR="-i https://mirrors.aliyun.com/pypi/simple/"
 python -m pip install --upgrade pip -q ${PIP_MIRROR} || warn "pip 升级失败，继续"
 
 # 逐个装，失败时能定位到具体包
+#
+# 注意：pip 包名 ≠ import 名，必须映射。曾经的 bug：
+#   scikit-image 的 import 名是 skimage，用 `import scikit-image` 检查会 SyntaxError，
+#   于是永远判为"未安装"，装完再检查还是失败，脚本直接 exit。
+declare -A IMPORT_NAME=(
+    [scikit-image]=skimage
+    [python-docx]=docx
+)
 for pkg in numpy scipy scikit-image h5py rasterio snaphu; do
-    if python -c "import ${pkg}" 2>/dev/null; then
-        ok "${pkg} 已装（$(python -c "import ${pkg}; print(getattr(${pkg},'__version__','?'))" 2>/dev/null)）"
+    imp="${IMPORT_NAME[$pkg]:-$pkg}"
+    if python -c "import ${imp}" 2>/dev/null; then
+        ver=$(python -c "import ${imp}; print(getattr(${imp},'__version__','?'))" 2>/dev/null)
+        ok "${pkg} 已装（${ver}）"
         continue
     fi
     echo "  安装 ${pkg} ..."
@@ -138,10 +150,17 @@ done
 # ---------- 5. 验证 snaphu ----------
 step "5/6 验证 snaphu"
 
-if python -c "import snaphu, sys; print('  snaphu', getattr(snaphu,'__version__','?'))" 2>/dev/null; then
-    ok "snaphu 可 import"
+if ! command -v snaphu >/dev/null 2>&1; then
+    err "找不到 snaphu 可执行文件（/usr/bin/snaphu）。pip 包只是包装，必须有系统二进制"
+    warn "修复：sudo apt install -y snaphu"
+    exit 1
+fi
+ok "snaphu 二进制：$(command -v snaphu) ($(snaphu 2>&1 | head -1))"
+
+if python -c "import snaphu; print('  snaphu-py', snaphu.__version__)" 2>/dev/null; then
+    ok "snaphu-py 可 import"
 else
-    err "snaphu 装上了但 import 失败，看上面的报错"
+    err "snaphu-py import 失败"
     exit 1
 fi
 
