@@ -1,0 +1,46 @@
+[Unit]
+# 智慧矿山平台 · 业务后端
+# 安装：
+#   cp rs-backend.service /etc/systemd/system/
+#   systemctl daemon-reload && systemctl enable --now rs-backend
+Description=RS Platform backend (Spring Boot)
+Documentation=file:///opt/rs-platform/docs/25-部署方案.md
+After=network-online.target mysqld.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=rs
+Group=rs
+WorkingDirectory=/opt/rs-platform
+
+# 环境变量文件（权限 600，属主 root）：
+#   BACKEND_PORT / DB_HOST / DB_PORT / DB_NAME / DB_USER / DB_PASSWORD
+#   JWT_SECRET / INFERENCE_BASE_URL / JAVA_CALLBACK_URL / INFERENCE_CALLBACK_TOKEN
+#   APP_IMAGERY_UPLOAD_DIR=/opt/rs-platform/data/imagery
+EnvironmentFile=/etc/rs-platform/backend.env
+
+# 裸机部署时 backend 与 inference 同机，JAVA_CALLBACK_URL 用 127.0.0.1 即可
+ExecStart=/usr/bin/java -XX:MaxRAMPercentage=70 -Duser.timezone=Asia/Shanghai \
+    -jar /opt/rs-platform/backend.jar
+
+Restart=always
+RestartSec=5s
+# JVM 收到 SIGTERM 的退出码，别让 systemd 当成失败
+SuccessExitStatus=143
+
+# 上传大文件需要较多文件描述符
+LimitNOFILE=65535
+
+# 基本加固
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ReadWritePaths=/opt/rs-platform/data
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=rs-backend
+
+[Install]
+WantedBy=multi-user.target

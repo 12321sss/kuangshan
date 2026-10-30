@@ -1,0 +1,36 @@
+# 前端：Node 构建 → nginx 托管（静态 + 反代）
+#
+# 构建上下文是仓库根目录（compose 里 context: ../..）。
+
+FROM node:22-alpine AS build
+WORKDIR /app
+
+ARG NPM_REGISTRY=https://registry.npmmirror.com
+
+# 这两个是 **Vite 构建期变量**，会被编译进 bundle：
+#   天地图 tk 缺失 → 三维大屏底图空白
+#   Cesium ion token → 只影响备用资产通道，底图不依赖它
+# 也就是说：换 key 必须重新构建镜像，改环境变量重启容器没用。
+ARG VITE_TIANDITU_TOKEN=""
+ARG VITE_CESIUM_TOKEN=""
+
+# 锁文件在仓库里，用 npm ci 保证可复现
+COPY frontend/package.json frontend/package-lock.json ./
+RUN npm ci --registry=${NPM_REGISTRY}
+
+COPY frontend/ ./
+RUN VITE_TIANDITU_TOKEN=${VITE_TIANDITU_TOKEN} \
+    VITE_CESIUM_TOKEN=${VITE_CESIUM_TOKEN} \
+    npm run build
+
+FROM nginx:1.27-alpine
+
+# 用仓库里的配置覆盖默认站点（/api 与 /sentinel 反代规则在这里）
+COPY deploy/prod/nginx/rs-platform.conf /etc/nginx/conf.d/default.conf
+
+COPY --from=build /app/dist /usr/share/nginx/html
+
+EXPOSE 80
+
+HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
+    CMD wget -qO- http://127.0.0.1/healthz >/dev/null || exit 1

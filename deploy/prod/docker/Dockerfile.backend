@@ -1,0 +1,42 @@
+# 业务后端：Maven 多阶段构建 → JRE 运行镜像
+#
+# 构建上下文是**仓库根目录**（compose 里 context: ../..），
+# 所以下面的 COPY 路径都是相对仓库根写的。
+
+FROM maven:3.9-eclipse-temurin-17 AS build
+WORKDIR /src
+
+# 仓库自带的华为云镜像配置，构建机不需要另外配 Maven
+COPY deploy/maven-settings.xml /root/.m2/settings.xml
+
+# 先只拷 pom 拉依赖，源码变动时能复用这一层缓存
+COPY backend-java/pom.xml ./
+RUN mvn -B -q -DskipTests dependency:go-offline || true
+
+COPY backend-java/src ./src
+RUN mvn -B -q -DskipTests package \
+ && cp target/*.jar /src/app.jar
+
+FROM eclipse-temurin:17-jre-jammy
+
+# curl 用于 HEALTHCHECK；libgomp/字体等 JRE 镜像已自带
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends curl \
+ && rm -rf /var/lib/apt/lists/* \
+ && useradd -r -u 10001 -s /usr/sbin/nologin rs \
+ && mkdir -p /data/imagery \
+ && chown -R rs:rs /data
+
+USER rs
+WORKDIR /app
+COPY --from=build --chown=rs:rs /src/app.jar /app/app.jar
+
+ENV TZ=Asia/Shanghai
+EXPOSE 8080
+
+# start-period 给足：首次启动 Hibernate 建表 + 初始化权限目录，实测 20–40s
+HEALTHCHECK --interval=30s --timeout=5s --start-period=90s --retries=5 \
+    CMD curl -fsS http://127.0.0.1:8080/actuator/health || exit 1
+
+# 端口与数据库连接全部由环境变量覆盖（application.yml 里已有默认值）
+ENTRYPOINT ["java", "-XX:MaxRAMPercentage=70", "-Duser.timezone=Asia/Shanghai", "-jar", "/app/app.jar"]
