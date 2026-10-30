@@ -31,18 +31,24 @@ CHUNK = 4 << 20  # 4MB
 
 def _session(authenticated: bool = False) -> requests.Session:
     s = requests.Session()
-    s.trust_env = False  # 本机全局代理会让 ASF API 502，直连反而通
+    s.trust_env = True   # 走环境变量代理(127.0.0.1:55979)；urs/earthdatacloud 直连被墙，必须走代理
     if authenticated:
         auth = netrc.netrc().authenticators("urs.earthdata.nasa.gov")
         if not auth:
             raise SystemExit("未找到 ~/.netrc 里的 urs.earthdata.nasa.gov 凭据")
         user, _, password = auth
-        from asf_search import ASFSession
-
-        sess = ASFSession()
-        sess.auth_with_creds(user, password)
-        sess.trust_env = False
-        return sess
+        # 直接拿 Bearer token，再带 Authorization 头下载。
+        # 为什么不走 asf_search.ASFSession：它内部 POST /api/users/find_or_create_token，
+        # 该端点走本机代理时 SSL 握手会 EOF（UNEXPECTED_EOF_WHILE_READING）。
+        # GET /api/users/tokens 走代理是通的，拿到的 token 直接 Bearer 用即可。
+        r = s.get("https://urs.earthdata.nasa.gov/api/users/tokens",
+                  auth=(user, password), timeout=60)
+        if r.status_code != 200:
+            raise SystemExit(f"Earthdata 认证失败 HTTP {r.status_code}: {r.text[:200]}")
+        tokens = r.json()
+        if not tokens:
+            raise SystemExit("Earthdata 账号下没有任何 token，请先到 urs 页面生成")
+        s.headers.update({"Authorization": f"Bearer {tokens[0]['access_token']}"})
     return s
 
 

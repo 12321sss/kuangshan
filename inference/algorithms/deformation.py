@@ -181,3 +181,191 @@ def velocity_level(velocity_mmyr: float) -> dict:
     if v < 300:
         return {"level": 4, "label": "快速", "range": "100-300 mm/yr"}
     return {"level": 5, "label": "极快速", "range": ">300 mm/yr"}
+
+
+def summarize_field(
+    velocity: np.ndarray,
+    acceleration: np.ndarray,
+    tf_days: np.ndarray | None = None,
+    xs: np.ndarray | None = None,
+    ys: np.ndarray | None = None,
+    top_n: int = 10,
+    accel_thr: float = 20.0,
+    decel_thr: float = -20.0,
+) -> dict[str, Any]:
+    """把形变场汇总成「空间化证据」，供安全评估直接引用。
+
+    单个标量（全区最大速率）会掩盖「局部快速蠕滑但整体平均不高」的危险情况，
+    也无法回答「哪里在动、动得多快、整体什么趋势」。本函数把速度/加速度/
+    失稳时刻三个场压成一份结构化证据：
+
+      - 危险测点清单：按风险排序的 top_n 个像元（速度越快、在加速、可外推失稳的越靠前）
+      - 趋势分布：加速 / 稳定 / 减速 像元占比
+      - 整体趋势研判：加速 / 稳定 / 减速 / 数据不足，附依据与置信度
+
+    只依赖 numpy，可单测。是「形变 → 安全分析」桥接的关键一环。
+
+    参数
+    ----
+    velocity / acceleration：同 shape (H,W)，无效处 NaN
+    tf_days：失稳外推天数 (H,W)，NaN 表示不可外推；可传 None
+    xs / ys：像元中心坐标（经度 / 纬度），长度 W / H；缺省用列号 / 行号
+    top_n：返回的危险测点数量
+    accel_thr / decel_thr：加速 / 减速判定的加速度阈值（mm/yr²）
+
+    返回
+    ----
+    { n_valid, n_forecastable, velocity, trend, verdict, hotspots, note }
+    """
+    v = np.asarray(velocity, dtype=np.float64)
+    a = np.asarray(acceleration, dtype=np.float64)
+    if v.shape != a.shape:
+        raise ValueError("velocity 与 acceleration 形状不一致")
+
+    valid = np.isfinite(v) & np.isfinite(a)
+    n_valid = int(valid.sum())
+    out: dict[str, Any] = {
+        "n_valid": n_valid,
+        "n_forecastable": 0,
+        "hotspots": [],
+    }
+
+    if n_valid == 0:
+        out["verdict"] = {"type": "数据不足", "confidence": "low",
+                          "basis": "无有效形变像元"}
+        out["trend"] = {"accelerating": 0, "stable": 0, "decelerating": 0}
+        return out
+
+    # ---- 趋势分布 ----
+    acc_n = int((a[valid] >= accel_thr).sum())
+    dec_n = int((a[valid] <= decel_thr).sum())
+    stable_n = n_valid - acc_n - dec_n
+    out["trend"] = {
+        "accelerating": acc_n,
+        "stable": stable_n,
+        "decelerating": dec_n,
+        "pctAccelerating": round(acc_n / n_valid * 100, 1),
+        "pctDecelerating": round(dec_n / n_valid * 100, 1),
+    }
+
+    # ---- 可外推失稳时刻的像元数 ----
+    forecastable = np.zeros(v.shape, dtype=bool)
+    if tf_days is not None:
+        tf = np.asarray(tf_days, dtype=np.float64)
+        forecastable = valid & np.isfinite(tf) & (tf > 0)
+        out["n_forecastable"] = int(forecastable.sum())
+
+    # ---- 速度统计（用绝对值衡量「动得多快」）----
+    absv = np.abs(v[valid])
+    out["velocity"] = {
+        "median": round(float(np.median(absv)), 2),
+        "p5": round(float(np.percentile(absv, 5)), 2),
+        "p95": round(float(np.percentile(absv, 95)), 2),
+        "maxAbs": round(float(absv.max()), 2),
+    }
+
+    # ---- 危险测点：按综合风险排序 ----
+    # 排序键 = 速度项（|v|/100）+ 加速项（0.3）+ 失稳项（0.4）。
+    # 速度是主项，加速与可外推失稳是「危险征兆」的加权加分。
+    vv = v[valid]
+    aa = a[valid]
+    ff = forecastable[valid]
+    risk_score = np.abs(vv) / 100.0 \
+        + (aa >= accel_thr).astype(float) * 0.3 \
+        + ff.astype(float) * 0.4
+
+    rows, cols = np.nonzero(valid)
+    order = np.argsort(-risk_score)[:top_n]
+    for idx in order:
+        r_, c_ = int(rows[idx]), int(cols[idx])
+        x = float(xs[c_]) if xs is not None else float(c_)
+        y = float(ys[r_]) if ys is not None else float(r_)
+        lv = velocity_level(float(vv[idx]))
+        tf_val = None
+        if tf_days is not None:
+            tfi = float(tf[r_, c_])
+            if np.isfinite(tfi) and tfi > 0:
+                tf_val = round(tfi, 1)
+        out["hotspots"].append({
+            "x": round(x, 6),
+            "y": round(y, 6),
+            "velocity": round(float(vv[idx]), 2),
+            "acceleration": round(float(aa[idx]), 2),
+            "tfDays": tf_val,
+            "severity": lv["level"],
+            "severityLabel": lv["label"],
+        })
+
+    # ---- 整体趋势研判 ----
+    acc_ratio = acc_n / n_valid
+    dec_ratio = dec_n / n_valid
+    med_a = float(np.median(a[valid]))
+    if acc_ratio >= 0.5:
+        verdict = {"type": "整体加速", "confidence": "high",
+                   "basis": f"{acc_n}/{n_valid} 像元在加速（加速度≥{accel_thr} mm/yr²）"}
+    elif acc_ratio >= 0.3 or med_a >= accel_thr:
+        verdict = {"type": "局部加速", "confidence": "medium",
+                   "basis": f"{acc_n}/{n_valid} 像元在加速（{round(acc_ratio*100,1)}%），中位加速度 {round(med_a,1)} mm/yr²"}
+    elif dec_ratio >= 0.3:
+        verdict = {"type": "整体减速", "confidence": "medium",
+                   "basis": f"{dec_n}/{n_valid} 像元在减速（{round(dec_ratio*100,1)}%）"}
+    else:
+        verdict = {"type": "整体稳定", "confidence": "medium",
+                   "basis": f"加速/减速像元占比均 < 30%，中位速率 {round(float(np.median(absv)),1)} mm/yr"}
+    out["verdict"] = verdict
+    out["note"] = ("单轨 LOS 视线向；趋势研判基于当前观测期，"
+                   "信噪比不足时应将可靠度标注为低，不作为失稳判定依据")
+    return out
+
+
+def build_evidence(
+    velocity: np.ndarray,
+    acceleration: np.ndarray,
+    tf_days: np.ndarray | None,
+    snr: float,
+    xs: np.ndarray | None = None,
+    ys: np.ndarray | None = None,
+    top_n: int = 10,
+) -> dict[str, Any]:
+    """把形变场 + 信噪比组装成 risk.evaluate 可直接消费的「形变证据」dict。
+
+    这是「形变 → 安全分析」的桥接函数：run_deformation.py 产出速度/加速度/
+    失稳时刻三个场后，调本函数得到一份结构化证据，再原样传进 risk 的
+    deformation 字段。字段名与 risk 侧约定对齐：
+
+      velocityMmyr     规则覆盖用的速度标量（场最大 |v|）
+      accelerationMmyr2 规则覆盖用的加速度标量（正向加速的 P95）
+      reliable          信噪比是否达标（不达标时 risk 侧不提级，只提示）
+      summary / verdict / hotspots / nForecastable   空间化明细
+
+    只依赖 numpy，可单测。
+    """
+    v = np.asarray(velocity, dtype=np.float64)
+    a = np.asarray(acceleration, dtype=np.float64)
+
+    summary = summarize_field(v, a, tf_days, xs, ys, top_n)
+    reliable = bool(snr >= 0.3)
+
+    # 规则覆盖用的两个标量
+    vel = summary["velocity"]["maxAbs"] if summary["n_valid"] > 0 else None
+    # 加速度取「正向加速」方向的 P95，避免被单个极端像元主导；
+    # 减速方向不参与提级（提级判定看的是「在加速」）
+    pos_a = a[np.isfinite(a) & (a > 0)]
+    if pos_a.size >= 5:
+        acc = round(float(np.percentile(pos_a, 95)), 2)
+    elif pos_a.size:
+        acc = round(float(pos_a.max()), 2)
+    else:
+        acc = None
+
+    return {
+        "velocityMmyr": vel,
+        "accelerationMmyr2": acc,
+        "reliable": reliable,
+        "snr": round(float(snr), 3),
+        "summary": summary,
+        "verdict": summary.get("verdict"),
+        "hotspots": summary.get("hotspots", []),
+        "nForecastable": summary.get("n_forecastable", 0),
+        "note": summary.get("note", ""),
+    }
