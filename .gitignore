@@ -18,6 +18,10 @@ out/
 *.tsbuildinfo
 __pycache__/
 *.py[cod]
+# Python 测试/检查工具缓存（pytest 与 ruff 都会在项目下建目录）
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
 
 # 影像瓦片缓存：首次运行自动重新下载（约 70MB）
 .cache/
