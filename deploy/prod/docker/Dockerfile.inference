@@ -1,0 +1,49 @@
+# 解译服务：Python 3.13 + 遥感栈
+#
+# 构建上下文是仓库根目录（compose 里 context: ../..）。
+
+FROM python:3.13-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    TZ=Asia/Shanghai
+
+# libgomp1：scikit-learn 的 OpenMP 运行时，缺了会在 import sklearn 时报
+#   ImportError: libgomp.so.1: cannot open shared object file
+# rasterio / shapely / numpy / scipy 用 manylinux 轮子，自带 GDAL，无需装系统 GDAL。
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends libgomp1 \
+ && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# 国内构建默认走清华源；客户内网有私有源用 --build-arg PIP_INDEX_URL 覆盖
+ARG PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
+COPY inference/requirements.txt ./
+RUN pip install -r requirements.txt -i ${PIP_INDEX_URL}
+
+COPY inference/ ./
+
+# 非 root 运行；缓存与演示包要可写
+RUN useradd -r -u 10002 -s /usr/sbin/nologin rs \
+ && mkdir -p /data/cache /data/demo \
+ && chown -R rs:rs /data /app
+
+USER rs
+
+# 缓存与演示包落在卷上：容器重建不丢（演示包在内网无法重下）
+ENV INFERENCE_CACHE_DIR=/data/cache \
+    INFERENCE_DEMO_DIR=/data/demo \
+    INFERENCE_LOG_LEVEL=INFO
+
+EXPOSE 8010
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=5 \
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8010/health', timeout=5)"
+
+# 必须单 worker：任务表在进程内存里，多 worker 会出现
+# 「提交落在 A 进程、查进度打到 B 进程 → 任务不存在」。
+# 要扩容先把 app/tasks.py 换成 Redis 实现，再谈 --workers。
+CMD ["python", "-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8010", "--workers", "1"]

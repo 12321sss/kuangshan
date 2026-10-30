@@ -1,0 +1,42 @@
+[Unit]
+# 智慧矿山平台 · 解译服务（FastAPI）
+# 安装：
+#   cp rs-inference.service /etc/systemd/system/
+#   systemctl daemon-reload && systemctl enable --now rs-inference
+Description=RS Platform inference service (FastAPI/uvicorn)
+Documentation=file:///opt/rs-platform/docs/25-部署方案.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=rs
+Group=rs
+
+# 必须在 inference 目录下启动：main.py 用 `from app import create_app`，
+# 依赖工作目录在 sys.path 上（uvicorn 会把 cwd 加进去）
+WorkingDirectory=/opt/rs-platform/inference
+EnvironmentFile=/etc/rs-platform/inference.env
+
+# 单 worker：任务表在进程内存里，多 worker 会导致「提交与查进度打到不同进程」
+ExecStart=/opt/rs-platform/inference/.venv/bin/python -m uvicorn main:app \
+    --host 127.0.0.1 --port 8010 --workers 1
+
+Restart=always
+RestartSec=5s
+SuccessExitStatus=143
+
+LimitNOFILE=65535
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+# 缓存与演示包要可写
+ReadWritePaths=/opt/rs-platform/data /opt/rs-platform/inference/.cache
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=rs-inference
+
+[Install]
+WantedBy=multi-user.target

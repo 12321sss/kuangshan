@@ -1,0 +1,140 @@
+# 智慧矿山平台 · 生产单机编排
+#
+#   cp .env.example .env && vi .env
+#   docker compose --env-file .env up -d --build
+#
+# 网络规划：只有 frontend 映射宿主机端口；backend / inference / mysql 仅在同一
+# compose 网络内可达，排查时用 docker compose exec，不长期暴露端口。
+name: rs-platform
+
+# 日志统一限长：默认 json-file 无限增长，一个月的解译日志能把盘吃满
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "50m"
+    max-file: "5"
+
+services:
+  # ---------------------------------------------------------------
+  # 业务库（空间库 PostGIS 预留在 dev compose 里，生产按需再加）
+  # ---------------------------------------------------------------
+  mysql:
+    image: mysql:8.0
+    container_name: rs-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:?必须在 .env 里设置 DB_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${DB_NAME:-rs_platform}
+      # 业务账号由镜像初始化时创建，后端不用 root 连库
+      MYSQL_USER: ${DB_USER:-rs_app}
+      MYSQL_PASSWORD: ${DB_PASSWORD:?必须在 .env 里设置 DB_PASSWORD}
+      TZ: Asia/Shanghai
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      - --default-time-zone=+08:00
+      # 高分影像的元数据与矢量 JSON 有时较大，默认 64M 可能不够
+      - --max-allowed-packet=256M
+    volumes:
+      - rs-mysql:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -u root -p$$MYSQL_ROOT_PASSWORD --silent"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 40s
+    logging: *default-logging
+    # 需要本机用客户端连库排查时再临时打开（仅绑 127.0.0.1）
+    # ports:
+    #   - "127.0.0.1:3306:3306"
+
+  # ---------------------------------------------------------------
+  # 业务后端（Spring Boot 3）
+  # ---------------------------------------------------------------
+  backend:
+    image: rs-platform/backend:${TAG:-latest}
+    container_name: rs-backend
+    restart: unless-stopped
+    build:
+      context: ../..
+      dockerfile: deploy/prod/docker/Dockerfile.backend
+    depends_on:
+      mysql:
+        condition: service_healthy
+    environment:
+      BACKEND_PORT: "8080"
+      DB_HOST: mysql
+      DB_PORT: "3306"
+      DB_NAME: ${DB_NAME:-rs_platform}
+      DB_USER: ${DB_USER:-rs_app}
+      DB_PASSWORD: ${DB_PASSWORD}
+      JWT_SECRET: ${JWT_SECRET:?必须在 .env 里设置 JWT_SECRET}
+      # 容器内互相访问必须用服务名。写成 localhost 会指向容器自己。
+      INFERENCE_BASE_URL: http://inference:8010
+      # 回调地址：inference 算完要能打回 backend。
+      # 默认值 http://localhost:8080 在容器里是「inference 自己」，会导致
+      # 解译结果永远落不了库（且不报错），必须显式覆盖。
+      JAVA_CALLBACK_URL: http://backend:8080/api/callback/task-complete
+      INFERENCE_CALLBACK_TOKEN: ${INFERENCE_CALLBACK_TOKEN:?必须在 .env 里设置 INFERENCE_CALLBACK_TOKEN}
+      # 上传影像落盘位置（默认 ./data/imagery 是相对工作目录，容器里必须给绝对路径）
+      APP_IMAGERY_UPLOAD_DIR: /data/imagery
+      TZ: Asia/Shanghai
+    volumes:
+      - rs-imagery:/data/imagery
+    logging: *default-logging
+    # ports:
+    #   - "127.0.0.1:8080:8080"
+
+  # ---------------------------------------------------------------
+  # 解译服务（FastAPI）
+  # ---------------------------------------------------------------
+  inference:
+    image: rs-platform/inference:${TAG:-latest}
+    container_name: rs-inference
+    restart: unless-stopped
+    build:
+      context: ../..
+      dockerfile: deploy/prod/docker/Dockerfile.inference
+      args:
+        PIP_INDEX_URL: ${PIP_INDEX_URL:-https://pypi.tuna.tsinghua.edu.cn/simple}
+    environment:
+      INFERENCE_CALLBACK_TOKEN: ${INFERENCE_CALLBACK_TOKEN}
+      INFERENCE_LOG_LEVEL: ${INFERENCE_LOG_LEVEL:-INFO}
+      TZ: Asia/Shanghai
+    volumes:
+      # 瓦片缓存（可重下）与离线演示包（内网重下不了，建议保留）
+      - rs-cache:/data/cache
+      - rs-demo:/data/demo
+    logging: *default-logging
+    # 【不要 scale】任务表在进程内存里，多副本会出现「提交落在 A、查进度打到 B →
+    # 任务不存在」。保持单实例；要扩容先把 app/tasks.py 换成 Redis 实现。
+    # ports:
+    #   - "127.0.0.1:8010:8010"
+
+  # ---------------------------------------------------------------
+  # 前端（nginx：静态站点 + /api 与 /sentinel 反代）
+  # ---------------------------------------------------------------
+  frontend:
+    image: rs-platform/frontend:${TAG:-latest}
+    container_name: rs-frontend
+    restart: unless-stopped
+    build:
+      context: ../..
+      dockerfile: deploy/prod/docker/Dockerfile.frontend
+      args:
+        # 构建期变量：改完必须重新 build，重启容器无效
+        VITE_TIANDITU_TOKEN: ${VITE_TIANDITU_TOKEN:-}
+        VITE_CESIUM_TOKEN: ${VITE_CESIUM_TOKEN:-}
+        NPM_REGISTRY: ${NPM_REGISTRY:-https://registry.npmmirror.com}
+    depends_on:
+      - backend
+      - inference
+    ports:
+      - "${HTTP_PORT:-80}:80"
+    logging: *default-logging
+
+volumes:
+  rs-mysql:
+  rs-imagery:
+  rs-cache:
+  rs-demo:

@@ -1,0 +1,45 @@
+# Docker 构建上下文排除清单（放在仓库根，因为构建上下文是仓库根）
+#
+# 不排除的话：node_modules 5 万+ 文件、影像 67MB、.venv、target 都会被塞进构建上下文，
+# 每次 build 都要打包上传一遍，慢到没法用。
+
+# 依赖与构建产物（镜像内部会重新安装/构建）
+**/node_modules
+**/.venv
+**/venv
+**/__pycache__
+**/*.pyc
+**/dist
+**/target
+**/.pytest_cache
+**/.ruff_cache
+
+# 客户数据（体积大且含坐标，绝不能进镜像）
+影像/
+矿山边界/
+backend-java/data/
+inference/data/
+inference/.cache/
+inference/demo_data/
+
+# 交付文档与历史版本控制目录
+*.docx
+*.pdf
+*.zip
+docs/
+_backup_before_pull/
+遥感提取功能-增量包-*/
+遥感提取/
+
+# 本地环境与编辑器
+.git
+.gitignore
+.workbuddy/
+.vscode/
+.idea/
+**/.env
+**/.env.local
+
+# 运维产物
+logs/
+*.log
