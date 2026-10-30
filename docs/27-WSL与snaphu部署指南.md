@@ -321,3 +321,117 @@ autoMemoryReclaim=gradual
 >
 > 但如果你只是做矿区 AOI 级别的日常解译，**现有的纯 Python 后端已经够用**，
 > 不必为了 snaphu 折腾环境。
+
+---
+
+## 十二、装完之后：三条命令搞定剩余步骤
+
+前提：`wsl --install` 已跑完并**重启过电脑**，`wsl -l -v` 能看到 Ubuntu。
+
+### 第 1 条：确认 WSL2 与发行版（Windows 终端）
+
+```bash
+wsl --status
+wsl -l -v
+```
+
+期望 `VERSION` 列是 **2**。如果是 1：
+
+```bash
+wsl --set-version Ubuntu-24.04 2
+wsl --set-default-version 2
+```
+
+### 第 2 条：进 WSL 建项目快捷路径
+
+```bash
+wsl
+```
+
+进 Ubuntu 后：
+
+```bash
+# 中文路径在 /mnt/c 下容易出坑，软链成英文路径
+ln -sfn "/mnt/c/Users/asus/Desktop/尚子安/智慧矿山平台-源码包-20261016" ~/kuangshan
+ls ~/kuangshan/inference/scripts/
+```
+
+### 第 3 条：跑一键初始化脚本（换源 + 装 snaphu + 自检）
+
+```bash
+bash ~/kuangshan/inference/scripts/setup_snaphu_linux.sh
+```
+
+脚本会依次做（幂等，可重复跑）：
+
+| 步骤 | 动作 | 失败会怎样 |
+|---|---|---|
+| 0 | 检查是否 WSL、是否 root、有无 sudo | 非 WSL 只警告；以 root 跑直接退出 |
+| 1 | 换阿里云 apt 源（24.04 的 deb822 与 22.04 的 sources.list 都兼容，自动备份 `.bak`） | 换失败只警告，继续（只是慢） |
+| 2 | 装 `python3-venv` + **`build-essential`**（snaphu 纯 C，没编译器必失败） | 失败即退出 |
+| 3 | 在 `~/rs-venv` 建虚拟环境 | 失败即退出 |
+| 4 | 逐个 pip 装 numpy / scipy / scikit-image / h5py / rasterio / **snaphu** | 哪个失败报哪个；rasterio 失败会给 `libgdal-dev` 提示 |
+| 5 | `import snaphu` 验证 | 失败即退出 |
+| 6 | 跑 `scripts/unwrap.py --synthetic --backend snaphu` 端到端自检 | 失败即退出 |
+
+**成功的样子**（末尾会打印）：
+
+```
+✓ snaphu 可 import
+解缠完成（后端 snaphu，耗时 x.xx s）
+[自检] 与合成真值对比：
+  常数偏置 ... mm
+  去偏置后残差：RMS x.xx mm
+  低相干区被正确屏蔽：True
+✓ 合成数据解缠成功，产物在 /home/xxx/out_snaphu_test
+```
+
+### 之后每次用（三步）
+
+```bash
+# 1. 激活环境
+source ~/rs-venv/bin/activate
+
+# 2. 跑真实数据
+cd ~/kuangshan/inference
+python scripts/unwrap.py --input /path/GUNW.h5 \
+    --aoi 114.87,28.57,114.93,28.62 --backend snaphu --out ~/out_real
+
+# 3. 产物拷回 Windows（平台直接可读，格式与纯 Python 后端一致）
+cp ~/out_real/*.tif \
+   "/mnt/c/Users/asus/Desktop/尚子安/智慧矿山平台-源码包-20261016/inference/.cache/nisar/"
+```
+
+### 对比两种后端精度（建议做一次）
+
+```bash
+cd ~/kuangshan/inference && source ~/rs-venv/bin/activate
+python scripts/unwrap.py --synthetic --backend python --out ~/out_py
+python scripts/unwrap.py --synthetic --backend snaphu --out ~/out_snaphu
+# 比较两次 [自检] 的 RMS 残差，snaphu 通常更小（低相干边界附近尤其明显）
+```
+
+---
+
+## 十三、为什么 AI 不能直接代跑 `wsl.exe`
+
+WorkBuddy 的命令执行环境受**安全策略 → 命令安全 → 程序黑名单**约束，
+`wsl.exe` 在黑名单里时长这样：
+
+```
+PROGRAM BLOCKED BY SECURITY POLICY - The sandbox prevented a program on the
+configured Program Blacklist from starting:
+  - wsl.exe (C:\Windows\system32\wsl.exe)
+```
+
+这条**不是沙箱权限问题，无法通过提权或换 shell 绕过**（系统会拦截任何等价调用）。
+两条路：
+
+1. **你在自己的终端里跑**（本文档所有命令都适用，你本来就是这么装的）——
+   装完后按第十二节走，脚本已封装好；
+2. **在 WorkBuddy 安全中心把 `wsl.exe` 移出黑名单**，之后 AI 就能直接代跑：
+   自动装 Ubuntu、装 snaphu、跑解缠、把产物拷回项目目录，全程不用你敲命令。
+
+> 推荐第 2 条：放行一次，以后所有 WSL 操作（排查、重装、跑数据）都能自动化。
+> 放行范围只给 `wsl.exe`（必要时加 `wslhost.exe`、`wslservice.exe`），
+> 不要把整个 `C:\Windows\system32` 放开。
