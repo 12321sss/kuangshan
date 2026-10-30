@@ -16,6 +16,7 @@ import argparse
 import json
 import netrc
 import sys
+import time
 from pathlib import Path
 
 import requests
@@ -65,7 +66,27 @@ def search(bbox: tuple[float, float, float, float], track: int | None) -> list[d
 
 
 def download(url: str, dest: Path) -> None:
-    """带断点续传；单景 2.2GB，走代理易断，续传避免每次重头拉。"""
+    """带断点续传 + 自动重试；单景 2.2GB 走代理易断，续传避免每次重头拉。
+
+    代理对 2GB 级大文件偶发 IncompleteRead（连接半路断），重试 + Range 续传即可，
+    实测重试 1~2 次基本都能下完。
+    """
+    for attempt in range(3):
+        try:
+            _download_once(url, dest)
+            return
+        except (SystemExit, KeyboardInterrupt):
+            raise
+        except Exception as e:  # noqa: BLE001
+            if attempt < 2:
+                print(f"    中断（{type(e).__name__}），{3 - attempt} 秒后重试 {attempt + 2}/3 ...",
+                      flush=True)
+                time.sleep(3)
+            else:
+                raise
+
+
+def _download_once(url: str, dest: Path) -> None:
     if dest.exists() and dest.stat().st_size > 0:
         done = dest.stat().st_size
         headers = {"Range": f"bytes={done}-"}
@@ -124,7 +145,10 @@ def main() -> None:
 
     for r in rows:
         dest = CACHE_DIR / r["fileName"]
-        if dest.exists() and dest.stat().st_size > 100 * 1024 * 1024:
+        # GUNW 完整约 2.2~2.3GB；阈值用 2GB，低于它视为未完成、走续传
+        #（曾经的坑：用 100MB 阈值，1.8GB 的断点文件被误判为「已下载」跳过，
+        #  导致该景永久缺失且不完整）
+        if dest.exists() and dest.stat().st_size > 2_000_000_000:
             print(f"[跳过] {r['fileName']}（已下载）")
             done[r["fileName"]] = {"date": r["startTime"], "track": r.get("track"),
                                    "flightDirection": r.get("flightDirection")}
