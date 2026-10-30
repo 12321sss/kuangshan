@@ -1,0 +1,6 @@
+# 开发/测试依赖（不参与部署）
+#
+#   .venv\Scripts\python.exe -m pip install -r requirements-dev.txt --only-binary :all:
+#   .venv\Scripts\python.exe -m pytest
+-r requirements.txt
+pytest==9.2.0

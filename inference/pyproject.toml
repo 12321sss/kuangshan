@@ -1,0 +1,28 @@
+[project]
+name = "rs-platform-inference"
+version = "0.3.0"
+description = "赣锋锂电遥感解译平台 · 解译服务（FastAPI + 指数法/监督分类/融合/报告）"
+requires-python = ">=3.11"
+
+# 依赖统一在 requirements.txt 里锁版本（含大量 GIS 栈的版本耦合说明），
+# 这里不重复声明，避免两处版本打架。
+dependencies = []
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# -ra：结尾打印 skip/xfail 原因；找不到影像被 skip 时能一眼看到
+addopts = "-q -ra"
+filterwarnings = [
+    "ignore::DeprecationWarning:starlette.*",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+# 只跑基础检查，不追求全绿——历史代码里还有不少长函数，先保证新代码不退化
+select = ["E", "F", "W", "I"]
+ignore = [
+    "E501",  # 行宽由人工把控，GIS 公式写一行更易读
+    "E402",  # 有些脚本需要先 sys.path 再 import
+]
+exclude = [".venv", "__pycache__", "demo_data", ".cache"]

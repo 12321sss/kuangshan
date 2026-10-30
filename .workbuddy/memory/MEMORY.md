@@ -41,7 +41,18 @@
 - **TasksView.vue 已删**，任务降级为流水追溯（/api/tasks 保留）；在线提取页改为真实提交+轮询
 - 权限点：page:imagery / action:imagery-manage（page:tasks、action:task-manage 已废）
 - 口径：输出为「潜在水土流失风险筛查」，非实测侵蚀量；采坑/排土场/尾矿无 DEM 与分割模型时无法细分，需标注局限
-- 自检脚本（可复跑）：inference/selftest_classify.py、selftest_e2e.py、selftest_fullchain.py、selftest_upload.py、selftest_timeseries.py
+- 自检脚本（可复跑）：`inference/scripts/selftest/`（classify/e2e/fullchain/upload/timeseries/online/aws_stac）
+
+## inference 工程结构（2026-10-30 重构后，以此为准）
+- `main.py` 仅 3 行（`app = create_app()`）；应用层在 `inference/app/`：config / logging_setup /
+  middleware（请求 ID+耗时）/ tasks（任务表+回调）/ geo / schemas / routers/*（14 个，一个 URL 前缀一个文件）
+- 算法层在 `inference/algorithms/`，**不 import fastapi**，可被脚本与测试直接调用；
+  包内互引用用相对导入，缓存目录统一走 `algorithms/paths.py` 的 `CACHE_DIR`（默认 `inference/.cache`）
+- 测试在 `inference/tests/`（pytest，`python -m pytest`）；`test_api_surface.py` 是契约护栏，
+  27 路径/28 方法写死，改接口必须同步
+- 一次性排查脚本在 `inference/scripts/`，端到端自检在 `inference/scripts/selftest/`
+- **不要再写 patch_xxx.py 改代码**：直接改源码 + 跑 pytest（`_t/` 已删，22 个补丁脚本作废）
+- 详见 `docs/24-解译服务工程结构.md`
 - **上传限制**必须放开：application.yml 里 spring.servlet.multipart.max-file-size=2GB（默认1MB 会让高分影像传不上去）
 - **上传影像（source=UPLOAD）也走解译**：白名单含 GF2/GF7/UPLOAD，前端 UPLOAD 时显式传 satellite 决定波段映射
 

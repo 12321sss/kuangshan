@@ -1,41 +1,47 @@
+# 解译服务运行依赖（inference/）
+#
+# 安装（Windows + Python 3.13，必须带 --only-binary，否则会尝试源码编译 numpy/scipy 并失败）：
+#   .venv\Scripts\python.exe -m pip install -r requirements.txt --only-binary :all:
+#
+# 版本策略：全部精确锁版本。这套遥感栈（rasterio/GDAL + numpy 2.x + Python 3.13）
+# 版本间耦合很紧，随意升级容易踩到「没有 cp313 轮子」或 ABI 不兼容。
+
+# ---- Web 框架 ----
 fastapi==0.115.6
 uvicorn[standard]==0.32.1
 pydantic==2.10.4
 
-# ---- 真实解译链路（S2/S3/S4）----
-# certifi：Windows 下Python 自带证书链不含 Copernicus 根证书，
-#          直连 catalogue.dataspace.copernicus.eu 会 SSL 握手中断，必须显式指定
-certifi==2026.7.22
+# ---- HTTP 客户端 ----
+# requests：回调 Java、场景检索
+# httpx：sentinel.py 的 HTTP 客户端（Range 请求更可控）
+# certifi：Windows 下 Python 自带证书链不含部分遥感站根证书，会 SSL 握手中断
 requests==2.34.2
-# 遥感栈：波段读取 / 指数计算 / 多边形矢量化
-# 注 1：numpy 必须 2.x —— Python 3.13 无 1.26 预编译轮子，只能源码编译（会失败）
-# 注 2：不要装 pyproj —— Windows 无预编译轮子且 3.13 编译失败；
-#       rasterio 已自带 GDAL 全套（CRS / warp / 窗口读取），足够做坐标变换
-# 注 3：实际版本为 2.5.4（装 scikit-learn 时被依赖解析升级）；
-#       已实测 rasterio 1.4.3 / shapely 2.2.0 与之兼容，勿随意降级
+httpx==0.28.1
+certifi==2026.7.22
+
+# ---- 遥感栈 ----
+# numpy 必须 2.x：Python 3.13 无 1.26 预编译轮子
+# 不要装 pyproj：Windows 无轮子且 3.13 编译失败；rasterio 已自带 GDAL 全套
+# affine：虽是 rasterio 的传递依赖，但本仓库直接 import 了它（窗口变换），故显式声明
 numpy==2.5.4
 rasterio==1.5.2
 shapely==2.2.0
+affine==3.0.1
+# tifffile：纯 Python 解析 COG 的 tile 偏移表，按 tile 精确下载而不是整景拉取
+tifffile==2026.10.15
+# Pillow：影像预览、坡度专题图、融合底图、分类专题图的 PNG 编码
+# （此前漏声明，全新环境装完会在预览/出图处才报 ModuleNotFoundError）
+Pillow==13.0.0
 
-# ---- 边界导入与监督分类（docs/12）----
+# ---- 边界解析与监督分类 ----
 # pyshp：纯 Python 读 SHP/SHX/DBF，无需 GDAL 绑定
-# scikit-learn + scipy：随机森林分类、混淆矩阵、Kappa 系数
-#   Windows + Python 3.13 均有 cp313 预编译轮子，安装时务必加 --only-binary :all:
-#   安装命令：.venv\Scripts\python.exe -m pip install -r requirements.txt --only-binary :all:
 pyshp==3.1.6
 scikit-learn==1.9.1
 scipy==1.18.1
-# python-docx：S4 稳定性/安全性报告导出
+
+# ---- 报告导出 ----
 python-docx==1.2.0
 
-# ---- 阿里云 AI Earth（数知地球）影像数据源 ----
-# 只装 SDK core + sts：签名交给 SDK，别自己手写 RPC 签名
-# （手写极易踩 Timestamp 冒号双重编码的坑，冒号需 %253A）
-aliyun-python-sdk-core==2.16.1
-aliyun-python-sdk-sts==3.1.3
-
-# ---- 在线 Sentinel-2 提取（AWS Earth Search STAC 直连，无需账号）----
-# httpx：sentinel.py 的 HTTP 客户端（比 requests 更稳的 Range 请求）
-# tifffile：纯 Python 解析 COG 的 tile 偏移表（精确按 tile 下载，不整景拉取）
-httpx==0.28.1
-tifffile==2026.10.15
+# 阿里云 AI Earth（数知地球）SDK 只在 scripts/probe_aliyun.py 里用到，
+# 属于一次性数据源调研脚本，不放进运行依赖——需要时单独装：
+#   pip install aliyun-python-sdk-core==2.16.1 aliyun-python-sdk-sts==3.1.3
