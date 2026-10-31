@@ -97,6 +97,8 @@
           <div class="lp-row"><span>传感器点位</span><el-switch v-model="layers.sensors" size="small" @change="toggleLayer" /></div>
           <div class="lp-row"><span>采坑范围（示例）</span><el-switch v-model="layers.pit" size="small" @change="toggleLayer" /></div>
           <div class="lp-row"><span>排土场范围（示例）</span><el-switch v-model="layers.dump" size="small" @change="toggleLayer" /></div>
+          <div class="lp-row"><span>形变热点</span><el-switch v-model="layers.deformation" size="small" @change="toggleLayer" /></div>
+          <div class="lp-row"><span>形变热点</span><el-switch v-model="layers.deformation" size="small" @change="toggleLayer" /></div>
 
           <div class="tb-footer">
             <div class="tb-btn" @click="flyHome">初始视图</div>
@@ -278,7 +280,7 @@ import {
   EllipsoidGeodesic, CallbackProperty, PolygonHierarchy,
   SingleTileImageryProvider, Rectangle
 } from 'cesium'
-import { screenApi, sensorApi } from '@/api'
+import { screenApi, sensorApi, deformationApi } from '@/api'
 import type { ScreenSummary, Sensor, SensorStatus, SensorType } from '@/api/types'
 import { tiandituBaseLayers } from '@/map/basemap'
 import { autoAdjustPerformance } from '@/map/perf'
@@ -312,7 +314,7 @@ const toolboxTab = ref<'view' | 'measure' | 'legend'>('view')
 const sceneMode = ref<'3d' | '2d'>('3d')
 const showStatusBar = ref(true)
 const basemap = ref<'img' | 'vec'>('img')
-const layers = reactive({ sensors: true, pit: true, dump: true })
+const layers = reactive({ sensors: true, pit: true, dump: true, deformation: true })
 const nowText = ref('')
 const cursor = reactive({ lng: '-', lat: '-', height: '-', heading: '-' })
 
@@ -387,6 +389,8 @@ function toggleLayer() {
   sensorEntities.forEach((e) => (e.show = layers.sensors))
   pitEntities.forEach((e) => (e.show = layers.pit))
   dumpEntities.forEach((e) => (e.show = layers.dump))
+  deformationEntities.forEach((e) => (e.show = layers.deformation))
+  deformationEntities.forEach((e) => (e.show = layers.deformation))
 }
 
 /** 二维/三维切换：morph 动画期间需要关掉按需渲染，完成后恢复 */
@@ -480,6 +484,34 @@ function addSensors(v: Viewer, list: Sensor[]) {
       }
     })
     sensorEntities.push(e)
+  }
+}
+
+// 形变热点测点（InSAR 危险点，标 LOS 速率）
+const deformationEntities: Entity[] = []
+function addDeformation(v: Viewer, list: Array<{ x: number; y: number; velocity: number; severityLabel?: string }>) {
+  for (const h of list) {
+    const e = v.entities.add({
+      id: `def-${h.x}-${h.y}`,
+      name: '形变热点',
+      position: Cartesian3.fromDegrees(h.x, h.y, 10),
+      point: {
+        pixelSize: h.velocity && Math.abs(h.velocity) > 100 ? 12 : 8,
+        color: Color.fromCssColorString('#ef4444'),
+        outlineColor: Color.WHITE,
+        outlineWidth: 1
+      },
+      label: {
+        text: `${(h.velocity ?? 0).toFixed(0)} mm/yr`,
+        font: '11px sans-serif',
+        fillColor: Color.WHITE,
+        style: 2,
+        outlineColor: Color.BLACK,
+        outlineWidth: 2,
+        pixelOffset: new Cartesian3(0, -16, 0)
+      }
+    })
+    deformationEntities.push(e)
   }
 }
 
@@ -667,6 +699,18 @@ async function loadRsLayers() {
       applyImageryLayer(data.imagery)
     }
     applyVectorLayer(data?.classes || [])
+    // 形变热点：有结果就叠加（失败静默，不影响其它图层）
+    try {
+      const def = await deformationApi.results(pid)
+      const hs = (def?.tracks || []).flatMap((t: any) => t.hotspots || [])
+      if (hs.length) addDeformation(viewer!, hs)
+    } catch { /* 无结果或服务未启动时忽略 */ }
+    // 形变热点：有结果就叠加（失败静默，不影响其它图层）
+    try {
+      const def = await deformationApi.results(pid)
+      const hs = (def?.tracks || []).flatMap((t: any) => t.hotspots || [])
+      if (hs.length) addDeformation(viewer!, hs)
+    } catch { /* 无结果或服务未启动时忽略 */ }
     // 有影像就飞到影像范围，没影像但有矢量就飞到矢量范围
     const b = data?.imagery?.bounds
     if (b) {
