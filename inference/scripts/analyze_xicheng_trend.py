@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 import argparse
+import time
 import glob
 import os
 import sys
@@ -129,6 +130,29 @@ def main() -> int:
     import json
     (RESULT / f"track{args.track}" / "deformation_evidence.json").write_text(
         json.dumps(evidence, ensure_ascii=False, indent=1), encoding="utf-8")
+
+    # 完整结果（含场数组，供前端热力图 + 大屏图层消费）
+    def _field(a):
+        return [[None if not np.isfinite(float(v)) else float(v) for v in row]
+                for row in np.round(a, 1)]
+    result_full = {
+        "track": args.track,
+        "bbox": list(bbox),
+        "shape": [H, W],
+        "reliable": evidence["reliable"],
+        "snr": evidence["snr"],
+        "verdict": evidence["verdict"],
+        "hotspots": evidence["hotspots"],
+        "nForecastable": evidence["nForecastable"],
+        "velocityField": _field(v_field),
+        "accelerationField": _field(a_field),
+        "statistics": evidence["summary"]["velocity"],
+        "trendDistribution": evidence["summary"]["trend"],
+        "generatedAt": time.strftime("%Y-%m-%d %H:%M:%S"),
+    }
+    (RESULT / f"track{args.track}" / "deformation_result.json").write_text(
+        json.dumps(result_full, ensure_ascii=False, indent=1), encoding="utf-8")
+    print(f"完整结果: {RESULT / f'track{args.track}' / 'deformation_result.json'}")
 
     print("\n" + "=" * 56)
     print("趋势研判:", evidence["verdict"]["type"],

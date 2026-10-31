@@ -5,7 +5,7 @@ import type {
   AvailabilityResult, AoiOption, ChangeEventsResult, ClassifySample, SceneItem, ScreenSummary,
   Sensor, SensorDataPoint, SlopeUnitsResult, SpatialRelationsResult, Station, SupervisedResult,
   TimeSeriesFrame,
-  TimeSeriesGroup, VegetationYearly, WarningRule
+  TimeSeriesGroup, VegetationYearly, WarningRule, DeformationResults
 } from './types'
 
 /** 业务 API 集中定义（认证相关走 stores/auth.ts 直连）
@@ -638,4 +638,12 @@ export const boundaryApi = {
   }> => http.post('/aoi-boundaries/save', req),
 
   remove: (id: number): Promise<void> => http.delete(`/aoi-boundaries/${id}`)
+}
+
+
+/** 形变监测（InSAR）结果：由 inference 产出，Java 代理读取 */
+export const deformationApi = {
+  /** 读取已产出的形变分析结果（单轨趋势 + 升降轨联合） */
+  results: (projectId: number): Promise<DeformationResults> =>
+    http.get('/deformation/results', { params: { projectId } })
 }

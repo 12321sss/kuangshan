@@ -133,6 +133,10 @@ def main() -> int:
         "shape": list(vel_desc.shape),
         "solvedPixels": n_solved,
         "vertical": _stats(vert), "eastWest": _stats(east),
+        # 场数组（前端热力图直接消费；round 到 1 位，NaN 保留）
+        "verticalField": _field(vert),
+        "eastWestField": _field(east),
+        "bbox": list(bbox),
         "note": "单轨/双轨均为 LOS 或 2D 近似；南北分量不可解；"
                 "时序仅 3 个月，速率可用、加速度不可信",
     }
@@ -146,6 +150,14 @@ def main() -> int:
     html_path.write_text(html, encoding="utf-8")
     print(f"报告: {html_path.resolve()}")
     return 0
+
+
+
+
+def _field(a: np.ndarray) -> list:
+    """把二维场转成 list[list]（round 1 位，NaN 保留），供前端热力图。"""
+    arr = np.round(a, 1)
+    return [[None if not np.isfinite(v) else float(v) for v in row] for row in arr]
 
 
 def _stats(a: np.ndarray) -> dict | None:

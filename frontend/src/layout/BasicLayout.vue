@@ -251,7 +251,10 @@ const moduleMenus: Record<string, MenuGroup[]> = {
     },
     {
       title: '持续监测',
-      items: [{ path: '/change-monitor', title: '变化监测', perm: 'page:change-monitor' }]
+      items: [
+        { path: '/change-monitor', title: '变化监测', perm: 'page:change-monitor' },
+        { path: '/deformation', title: '形变监测', perm: 'page:deformation' }
+      ]
     },
     {
       title: '结果比对',

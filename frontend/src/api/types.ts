@@ -686,3 +686,57 @@ export interface ChangeEventsResult {
   legend: Array<{ label: string; color: string }>
   disclaimer: string
 }
+
+
+// ---- 形变监测（InSAR）结果类型 ----
+export interface DeformationVerdict {
+  type: string
+  confidence: string
+  basis: string
+}
+
+export interface DeformationHotspot {
+  x: number
+  y: number
+  velocity: number
+  acceleration: number
+  tfDays: number | null
+  severity: number
+  severityLabel: string
+}
+
+export interface DeformationTrackResult {
+  track: number
+  bbox: number[]
+  shape: [number, number]
+  reliable: boolean
+  snr: number
+  verdict: DeformationVerdict
+  hotspots: DeformationHotspot[]
+  nForecastable: number | null
+  velocityField: (number | null)[][]
+  accelerationField: (number | null)[][]
+  statistics: { median: number; p5: number; p95: number; maxAbs: number }
+  trendDistribution: { accelerating: number; stable: number; decelerating: number; pctAccelerating: number }
+  generatedAt: string
+}
+
+export interface DeformationFusionResult {
+  descTrack: number
+  ascTrack: number
+  losDesc: number[]
+  losAsc: number[]
+  shape: number[]
+  solvedPixels: number
+  vertical: { median: number; p5: number; p95: number; min: number; max: number }
+  eastWest: { median: number; p5: number; p95: number; min: number; max: number }
+  verticalField: (number | null)[][]
+  eastWestField: (number | null)[][]
+  bbox: number[]
+  note: string
+}
+
+export interface DeformationResults {
+  fusion: DeformationFusionResult | null
+  tracks: DeformationTrackResult[]
+}

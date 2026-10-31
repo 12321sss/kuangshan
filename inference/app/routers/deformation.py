@@ -10,6 +10,9 @@
 """
 from __future__ import annotations
 
+from pathlib import Path
+from typing import Any
+
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
@@ -91,3 +94,40 @@ def multiscale_trend(req: MultiscaleRequest):
         "scales": result,
     }
     return {"code": 0, "message": "success", "data": data}
+
+
+# ---------------------------------------------------------------------------
+# 形变分析结果读取（读 inference 产出的结果 JSON，供前端热力图 / 大屏消费）
+# ---------------------------------------------------------------------------
+_RESULT_DIR = Path(__file__).resolve().parents[2] / ".cache" / "nisar" / "result"
+
+
+@router.get("/api/v1/deformation/results")
+def deformation_results():
+    """读取已产出的形变分析结果（单轨趋势 + 升降轨联合）。
+
+    扫描 .cache/nisar/result/ 下的 JSON，返回：
+      - fusion：升降轨联合结果（含 verticalField / eastWestField 场数组）
+      - tracks：各轨道单轨结果（含 velocityField / accelerationField、hotspots、verdict）
+
+    数据由 scripts/analyze_*.py 产出；本接口只读、不算，保证前端秒开。
+    """
+    import json
+
+    out: dict[str, Any] = {"fusion": None, "tracks": []}
+
+    # 升降轨联合结果
+    for f in sorted(_RESULT_DIR.glob("fusion_*.json")):
+        try:
+            out["fusion"] = json.loads(f.read_text(encoding="utf-8"))
+        except Exception:  # noqa: BLE001
+            continue
+
+    # 各轨道单轨结果
+    for f in sorted(_RESULT_DIR.glob("track*/deformation_result.json")):
+        try:
+            out["tracks"].append(json.loads(f.read_text(encoding="utf-8")))
+        except Exception:  # noqa: BLE001
+            continue
+
+    return {"code": 0, "message": "success", "data": out}
