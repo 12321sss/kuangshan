@@ -35,6 +35,7 @@ EXPECTED_ENDPOINTS = {
     ("POST", "/api/v1/fusion/merge"),
     ("POST", "/api/v1/report/generate"),
     ("POST", "/api/v1/ecology/rsei"),
+    ("POST", "/api/v1/deformation/multiscale"),
 }
 
 

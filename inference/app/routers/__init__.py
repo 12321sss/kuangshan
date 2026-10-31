@@ -9,6 +9,7 @@ main.py 只调 create_app()，不直接挂路由。
 from . import (
     boundary,
     classification,
+    deformation,
     ecology,
     extraction,
     fusion,
@@ -26,6 +27,7 @@ from . import (
 ALL_ROUTERS = [
     system.router,           # /health, /api/v1/class-types, /api/v1/scenes
     extraction.router,       # /api/v1/inference/*
+    deformation.router,      # /api/v1/deformation/*
     sentinel.router,         # /api/v1/sentinel/*
     terrain.router,          # /api/v1/terrain/*
     risk.router,             # /api/v1/risk/*

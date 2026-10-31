@@ -377,3 +377,172 @@ def build_evidence(
         "nForecastable": n_forecastable,
         "note": summary.get("note", ""),
     }
+
+
+# ---------------------------------------------------------------------------
+# 多时间尺度趋势分析
+# ---------------------------------------------------------------------------
+#
+# 为什么需要多尺度：单一「年均速率」会把关键信息抹平——一个整体年均 10 mm/yr
+# 的坡，可能前 10 个月几乎不动、最后 2 个月突然 80 mm/yr，年均值看起来"很稳定"，
+# 但这恰恰是临滑前兆。月尺度 / 周尺度速率序列能把这个变化暴露出来。
+#
+# 但时间尺度受**采样间隔**硬约束（口径红线，不能硬凑）：
+#   Sentinel-1 / NISAR 均为 12 天重访 →
+#     年窗口 ≈ 30 个点（很好）、季窗口 ≈ 7 个点（可以）、
+#     月窗口 ≈ 2.5 个点（勉强算速率）、周窗口 < 1 个点（**物理上不可分辨**）。
+# 不可分辨的尺度必须明确标注 available=False，绝不给客户一个看起来精确的假周速率。
+
+#: 尺度名 → 窗口天数
+SCALES: dict[str, float] = {
+    "annual": 365.25,
+    "quarterly": 91.3,
+    "monthly": 30.4,
+    "weekly": 7.0,
+}
+
+
+def _sliding_rates(t: np.ndarray, d: np.ndarray,
+                   win_yr: float, step_yr: float) -> tuple[list[float], list[float]]:
+    """滑动窗口算速率序列。
+
+    窗口中心从 t[0]+win/2 滑到 t[-1]-win/2，步长 step_yr；
+    每个窗口内用 Theil-Sen 稳健斜率（抗单期大气残差造成的坏点）。
+
+    返回 (窗口中心时间列表, 速率列表)。
+    """
+    t0, t1 = float(t[0]), float(t[-1])
+    if t1 - t0 < win_yr:
+        return [], []
+    centers: list[float] = []
+    rates: list[float] = []
+    c = t0 + win_yr / 2.0
+    while c <= t1 - win_yr / 2.0 + 1e-9:
+        lo, hi = c - win_yr / 2.0, c + win_yr / 2.0
+        mask = (t >= lo) & (t <= hi)
+        if int(mask.sum()) >= 2:
+            centers.append(round(float(c), 4))
+            rates.append(round(float(theil_sen_slope(t[mask], d[mask])), 2))
+        c += step_yr
+    return centers, rates
+
+
+def analyze_multiscale(
+    times: list[float],
+    disp: np.ndarray,
+    scales: tuple[str, ...] | None = None,
+    min_points_per_window: int = 2,
+) -> dict[str, Any]:
+    """多时间尺度趋势分析（年 / 季 / 月 / 周）。
+
+    对每个尺度给出：
+      - 是否可分辨（采样间隔决定的硬约束，不可分辨就明说，不硬算）
+      - 尺度内代表性速率（滑动窗口速率序列的中位数，抗离群）
+      - 速率序列（看形变在恶化还是收敛）
+      - 速率变化率（速率序列的斜率，即该尺度上的加速度）
+      - 波动幅度（速率序列的 P90-P10，反映不稳定程度）
+
+    参数
+    ----
+    times：观测时刻（小数年），升序
+    disp：累积位移（mm），与 times 等长
+    scales：要分析的尺度名（默认全部：annual/quarterly/monthly/weekly）
+    min_points_per_window：一个窗口内至少几个点才算得出速率（默认 2）
+
+    返回
+    ----
+    {scale: {available, reason, windowDays, nWindows, velocityMmYr,
+             velocitySeries, rateChangeMmYr2, variabilityMmYr, centers}}
+    """
+    t = np.asarray(times, dtype=np.float64)
+    d = np.asarray(disp, dtype=np.float64)
+    valid = np.isfinite(t) & np.isfinite(d)
+    t, d = t[valid], d[valid]
+
+    names = scales or tuple(SCALES.keys())
+    out: dict[str, Any] = {}
+
+    if len(t) < 2:
+        for name in names:
+            out[name] = {
+                "available": False,
+                "reason": f"有效观测点仅 {len(t)} 个，无法做任何尺度趋势",
+                "windowDays": SCALES.get(name),
+            }
+        return out
+
+    # 采样间隔（天）——决定各尺度的可分辨性
+    dt_days = float(np.median(np.diff(t))) * 365.25
+
+    for name in names:
+        win_days = SCALES[name]
+        win_yr = win_days / 365.25
+        span_yr = float(t[-1] - t[0])
+        pts_per_window = win_days / dt_days if dt_days > 0 else 0.0
+
+        # 不可分辨：窗口内点太少，或总跨度不足两个窗口
+        if pts_per_window < min_points_per_window:
+            out[name] = {
+                "available": False,
+                "reason": (f"采样间隔约 {dt_days:.0f} 天，{win_days:.0f} 天窗口内"
+                           f"仅约 {pts_per_window:.1f} 个观测点（需 ≥{min_points_per_window}），"
+                           f"该尺度物理上不可分辨"),
+                "windowDays": win_days,
+                "samplingIntervalDays": round(dt_days, 1),
+            }
+            continue
+        if span_yr < 2 * win_yr:
+            out[name] = {
+                "available": False,
+                "reason": (f"总观测跨度 {span_yr * 365.25:.0f} 天 < 2 个 {win_days:.0f} 天窗口，"
+                           f"无法形成有意义的速率序列"),
+                "windowDays": win_days,
+                "samplingIntervalDays": round(dt_days, 1),
+            }
+            continue
+
+        # 步长取采样间隔（每来一个观测就滑一步），但至少 1 天避免死循环
+        step_yr = max(dt_days / 365.25, 1.0 / 365.25)
+        centers, rates = _sliding_rates(t, d, win_yr, step_yr)
+
+        if len(rates) < 2:
+            out[name] = {
+                "available": False,
+                "reason": f"该尺度仅得到 {len(rates)} 个有效窗口，不足以形成序列",
+                "windowDays": win_days,
+                "samplingIntervalDays": round(dt_days, 1),
+            }
+            continue
+
+        r = np.asarray(rates, dtype=np.float64)
+        cen = np.asarray(centers, dtype=np.float64)
+
+        # 速率变化率：速率序列对时间的线性斜率（该尺度上的"加速度"）
+        # 只在窗口数 ≥3 时给，否则两点拟合无意义
+        rate_change = None
+        if len(r) >= 3:
+            cc = cen - cen.mean()
+            denom = float(cc @ cc)
+            if denom > 1e-12:
+                rate_change = round(float((cc @ r) / denom), 2)
+
+        out[name] = {
+            "available": True,
+            "windowDays": win_days,
+            "samplingIntervalDays": round(dt_days, 1),
+            "pointsPerWindow": round(pts_per_window, 1),
+            "nWindows": int(len(r)),
+            # 代表速率用中位数：避免某个窗口被单期大气残差带偏
+            "velocityMmYr": round(float(np.median(r)), 2),
+            "velocitySeries": [round(float(x), 2) for x in r],
+            "centers": centers,
+            # 速率变化率（mm/yr²）：>0 表示该尺度上形变在加速
+            "rateChangeMmYr2": rate_change,
+            "variabilityMmYr": round(float(np.percentile(r, 90) - np.percentile(r, 10)), 2),
+            "minMmYr": round(float(r.min()), 2),
+            "maxMmYr": round(float(r.max()), 2),
+            "trendDirection": ("加速" if (rate_change or 0) > 1.0
+                               else "减速" if (rate_change or 0) < -1.0 else "平稳"),
+        }
+
+    return out
