@@ -645,5 +645,16 @@ export const boundaryApi = {
 export const deformationApi = {
   /** 读取已产出的形变分析结果（单轨趋势 + 升降轨联合） */
   results: (projectId: number): Promise<DeformationResults> =>
-    http.get('/deformation/results', { params: { projectId } })
+    http.get('/deformation/results', { params: { projectId } }),
+  /** 发起形变分析任务（后台执行，完成后通知） */
+  submit: (req: { projectId: number; taskType?: string; track?: number }): Promise<{ taskId: number; status: string }> =>
+    http.post('/deformation/submit', req)
+}
+
+
+/** 站内通知（形变分析完成 / 系统） */
+export const notificationApi = {
+  list: (): Promise<any[]> => http.get('/notifications'),
+  unreadCount: (): Promise<{ count: number }> => http.get('/notifications/unread-count'),
+  markRead: (id: number): Promise<any> => http.post(`/notifications/${id}/read`)
 }

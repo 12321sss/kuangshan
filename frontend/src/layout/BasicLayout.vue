@@ -198,7 +198,7 @@ import { ElMessage } from 'element-plus'
 import { useAuthStore } from '@/stores/auth'
 import { useTabsStore } from '@/stores/tabs'
 import { useProjectStore } from '@/stores/project'
-import { alarmApi, searchApi } from '@/api'
+import { alarmApi, searchApi, notificationApi } from '@/api'
 
 const route = useRoute()
 const router = useRouter()
@@ -420,6 +420,7 @@ interface Notification {
   levelLabel: string
   time: string
   read: boolean
+  link?: string
 }
 const notifyVisible = ref(false)
 const notifications = ref<Notification[]>([])
@@ -435,7 +436,7 @@ async function loadNotifications() {
     const list = await alarmApi.list(projectStore.currentId ?? undefined)
     // 只把未关闭的告警作为消息；已读状态存 localStorage
     const readIds: number[] = JSON.parse(localStorage.getItem('rs_read_notifications') || '[]')
-    notifications.value = list
+    const alarmItems = list
       .filter((a) => a.status !== 'RESOLVED')
       .slice(0, 20)
       .map((a) => ({
@@ -447,6 +448,22 @@ async function loadNotifications() {
         time: (a.createdAt || '').replace('T', ' ').slice(0, 16),
         read: readIds.includes(a.id)
       }))
+    // 形变/系统通知（notifications 表）合并进消息中心
+    let sysItems: Notification[] = []
+    try {
+      const sys = await notificationApi.list()
+      sysItems = (sys || []).slice(0, 10).map((n: any) => ({
+        id: n.id,
+        title: n.title,
+        body: n.content || '',
+        level: n.type === 'DEFORMATION' ? 'BLUE' : 'BLUE',
+        levelLabel: n.type === 'DEFORMATION' ? '形变' : '系统',
+        time: (n.createdAt || '').replace('T', ' ').slice(0, 16),
+        read: n.read ?? false,
+        link: n.link
+      }))
+    } catch { /* 通知服务不可用时忽略 */ }
+    notifications.value = [...sysItems, ...alarmItems]
   } catch {
     notifications.value = []
   }

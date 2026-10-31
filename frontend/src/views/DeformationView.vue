@@ -10,6 +10,7 @@
           </span>
         </div>
         <div class="op-right">
+          <el-button :loading="submitting" @click="submitAnalysis">发起分析</el-button>
           <el-button :loading="loading" @click="load">刷新结果</el-button>
         </div>
       </div>
@@ -146,6 +147,7 @@ import { deformationApi } from '@/api'
 import type { DeformationResults, DeformationFusionResult, DeformationTrackResult } from '@/api/types'
 
 const loading = ref(false)
+const submitting = ref(false)
 const error = ref('')
 const fusion = ref<DeformationFusionResult | null>(null)
 const tracks = ref<DeformationTrackResult[]>([])
@@ -209,6 +211,32 @@ function percentile(sortedVals: number[], p: number): number {
   const s = [...sortedVals].sort((a, b) => a - b)
   const idx = Math.min(s.length - 1, Math.max(0, Math.floor((p / 100) * (s.length - 1))))
   return s[idx]
+}
+
+async function submitAnalysis() {
+  submitting.value = true
+  try {
+    const projectId = 1  // demo 项目，后续接项目上下文
+    await deformationApi.submit({ projectId, taskType: 'trend', track: 18 })
+    ElMessage.success('形变分析任务已提交，完成后会收到通知，可先去处理其它工作')
+  } catch (e: any) {
+    ElMessage.error(e?.response?.data?.message || '发起分析失败')
+  } finally {
+    submitting.value = false
+  }
+}
+
+async function submitAnalysis() {
+  submitting.value = true
+  try {
+    const projectId = 1  // demo 项目，后续接项目上下文
+    await deformationApi.submit({ projectId, taskType: 'trend', track: 18 })
+    ElMessage.success('形变分析任务已提交，完成后会收到通知，可先去处理其它工作')
+  } catch (e: any) {
+    ElMessage.error(e?.response?.data?.message || '发起分析失败')
+  } finally {
+    submitting.value = false
+  }
 }
 
 async function load() {
