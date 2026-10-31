@@ -96,7 +96,8 @@ def _download_once(url: str, dest: Path) -> None:
         done, headers, mode = 0, {}, "wb"
 
     sess = _session(authenticated=True)
-    with sess.get(url, headers=headers, stream=True, timeout=1800) as r:
+    # timeout=300：半开连接会让 read 永久挂起，5 分钟无数据就抛异常交给重试
+    with sess.get(url, headers=headers, stream=True, timeout=300) as r:
         if r.status_code not in (200, 206):
             raise SystemExit(f"下载失败 HTTP {r.status_code}")
         if mode == "wb":

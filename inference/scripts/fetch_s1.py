@@ -60,13 +60,24 @@ def _session(authenticated: bool = False) -> requests.Session:
 
 
 def search(bbox: tuple[float, float, float, float],
-           track: int | None = None) -> list[dict]:
-    """检索 S1 IW SLC，按时间升序返回。"""
+           track: int | None = None,
+           start: str | None = None,
+           end: str | None = None) -> list[dict]:
+    """检索 S1 IW SLC，按时间升序返回。
+
+    start / end：ISO 时间（如 2023-01-01T00:00:00Z），用于挑历史数据。
+    为什么需要：isce2 2.6.5 对 2025 年新发射的 S1D 有兼容问题（burst 判定为 0），
+    S1A/S1B 数据是成熟支持的。挑 2022-2023 的数据可以稳定跑通。
+    """
     params = {
         "platform": "SENTINEL-1", "processingLevel": "SLC", "beamMode": "IW",
         "bbox": ",".join(str(v) for v in bbox),
         "output": "json", "maxResults": 500,
     }
+    if start:
+        params["start"] = start
+    if end:
+        params["end"] = end
     rows = (_session().get(SEARCH_API, params=params, timeout=90).json() or [[]])[0] or []
     if track is not None:
         rows = [r for r in rows if str(r.get("track")) == str(track)]
@@ -84,7 +95,8 @@ def _download_once(url: str, dest: Path) -> None:
         done, headers, mode = 0, {}, "wb"
 
     sess = _session(authenticated=True)
-    with sess.get(url, headers=headers, stream=True, timeout=3600) as r:
+    # timeout=300：半开连接会让 read 永久挂起，5 分钟无数据就抛异常交给重试
+    with sess.get(url, headers=headers, stream=True, timeout=300) as r:
         if r.status_code not in (200, 206):
             raise SystemExit(f"下载失败 HTTP {r.status_code}")
         if mode == "wb":
@@ -143,11 +155,13 @@ def main() -> int:
     ap.add_argument("--track", type=int, default=None, help="轨道号（茜坑降轨主力 40）")
     ap.add_argument("--bbox", default=",".join(map(str, DEFAULT_BBOX)))
     ap.add_argument("--count", type=int, default=2, help="下载最近的 N 景（默认 2，构成一个干涉对）")
+    ap.add_argument("--start", default=None, help="起始时间 ISO，如 2023-01-01T00:00:00Z")
+    ap.add_argument("--end", default=None, help="结束时间 ISO")
     ap.add_argument("--unzip", action="store_true", help="下载后解压 SAFE")
     args = ap.parse_args()
 
     bbox = tuple(float(v) for v in args.bbox.split(","))
-    rows = search(bbox, args.track)
+    rows = search(bbox, args.track, args.start, args.end)
 
     if args.action == "list":
         print(f"共 {len(rows)} 景")
@@ -166,7 +180,8 @@ def main() -> int:
 
     for r in picked:
         name = r["fileName"]
-        dest = CACHE_DIR / f"{name}.zip"
+        # ASF 的 fileName 有的已带 .zip，避免出现 xxx.zip.zip
+        dest = CACHE_DIR / (name if name.lower().endswith(".zip") else f"{name}.zip")
         if dest.exists() and dest.stat().st_size > MIN_COMPLETE_BYTES:
             print(f"[跳过] {name}（已下载 {dest.stat().st_size / 1024**3:.2f} GB）")
         else:
