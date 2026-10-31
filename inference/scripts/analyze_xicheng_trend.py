@@ -137,7 +137,7 @@ def main() -> int:
           f"最大 |v| {evidence['summary']['velocity']['maxAbs']} mm/yr")
     print(f"信噪比: {snr:.3f} ({'可靠' if evidence['reliable'] else '不足，加速度仅供参考'})")
     print(f"危险测点: {len(evidence['hotspots'])} 个, "
-          f"可外推失稳 {evidence['summary']['n_forecastable']} 像元")
+          f"可外推失稳 {evidence['nForecastable'] if evidence['nForecastable'] is not None else '数据不足（信噪比不够）'}")
     print(f"风险提级: +{overlay['uplift']} 级")
     print("=" * 56)
     print(f"\n报告: {out_path.resolve()}")

@@ -358,6 +358,14 @@ def build_evidence(
     else:
         acc = None
 
+    hotspots = summary.get("hotspots", [])
+    n_forecastable = summary.get("n_forecastable", 0)
+    if not reliable:
+        # 口径红线：信噪比不足时，倒数速度外推的「失稳时刻」是噪声假象，
+        # 必须清空具体天数、失稳像元数置 None，绝不给客户一个看起来精确的假预警。
+        hotspots = [{**h, "tfDays": None} for h in hotspots]
+        n_forecastable = None
+
     return {
         "velocityMmyr": vel,
         "accelerationMmyr2": acc,
@@ -365,7 +373,7 @@ def build_evidence(
         "snr": round(float(snr), 3),
         "summary": summary,
         "verdict": summary.get("verdict"),
-        "hotspots": summary.get("hotspots", []),
-        "nForecastable": summary.get("n_forecastable", 0),
+        "hotspots": hotspots,
+        "nForecastable": n_forecastable,
         "note": summary.get("note", ""),
     }

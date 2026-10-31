@@ -119,17 +119,25 @@ def _build_html(out: dict, vel, acc, tf, times, disp_series, bbox, grid) -> str:
     ys = np.linspace(bbox[1], bbox[3], H)
 
     # ---- SVG 热力图（速度 / 加速度）----
-    def heat_svg(field, vmin, vmax, title, unit, cmap="seismic"):
+    def heat_svg(field, title, unit, cmap="seismic", vmin=None, vmax=None):
         w, h = W * 7, H * 7
         rects = []
         f = np.asarray(field, dtype=np.float64)
+        fv = f[np.isfinite(f)]
+        # 颜色范围自适应到 P5~P95：真实数据的极值（边缘大气残差）可达 ±400mm/yr，
+        # 若按全范围上色，热力图会被 23 个极端像元主导，真实的形变结构反而看不清。
+        if vmin is None and fv.size:
+            vmin = float(np.percentile(fv, 5))
+        if vmax is None and fv.size:
+            vmax = float(np.percentile(fv, 95))
+        span = (vmax - vmin) or 1.0
         for r in range(H):
             for c in range(W):
                 v = f[r, c]
                 if not np.isfinite(v):
                     color = "#222"
                 else:
-                    t = (np.clip(v, vmin, vmax) - vmin) / (vmax - vmin)
+                    t = (np.clip(v, vmin, vmax) - vmin) / span
                     color = _cmap(t, cmap)
                 rects.append(f'<rect x="{c*7}" y="{r*7}" width="7" height="7" '
                              f'fill="{color}"/>')
@@ -144,7 +152,10 @@ def _build_html(out: dict, vel, acc, tf, times, disp_series, bbox, grid) -> str:
         ymax = max(max(s) for s in series.values())
         pad = (ymax - ymin) * 0.1 or 1.0
         ymin, ymax = ymin - pad, ymax + pad
-        colors = {"沉降中心": "#e74c3c", "加速边坡": "#e67e22", "稳定参考区": "#2ecc71"}
+        # 动态调色板：按系列出现顺序分配颜色（真实/合成数据的关键名不同）
+        palette = ["#e74c3c", "#e67e22", "#2ecc71", "#3498db", "#9b59b6", "#16a085"]
+        colors = {name: palette[i % len(palette)]
+                  for i, name in enumerate(series.keys())}
         polys = []
         for name, s in series.items():
             pts = []
@@ -164,8 +175,8 @@ def _build_html(out: dict, vel, acc, tf, times, disp_series, bbox, grid) -> str:
                 f'<svg viewBox="0 0 {w} {h}" width="{w}" height="{h}">'
                 f'{"".join(polys)}</svg><div class="legend">{legend}</div></div>')
 
-    vel_svg = heat_svg(vel, -45, 5, "形变速率场（mm/yr，负=远离卫星/沉降）", "mm/yr")
-    acc_svg = heat_svg(acc, -10, 25, "形变加速度场（mm/yr²，正值=加速）", "mm/yr²", cmap="hot")
+    vel_svg = heat_svg(vel, "形变速率场（mm/yr，负=远离卫星/沉降，颜色取 P5~P95）", "mm/yr")
+    acc_svg = heat_svg(acc, "形变加速度场（mm/yr²，正值=加速，颜色取 P5~P95）", "mm/yr²", cmap="hot")
 
     # ---- 危险测点表 ----
     rows = ""
@@ -216,7 +227,7 @@ def _build_html(out: dict, vel, acc, tf, times, disp_series, bbox, grid) -> str:
  <div class="card"><div class="num">{v['summary']['n_valid']}</div><div class="lab">有效像元</div></div>
  <div class="card"><div class="num">{v['summary']['velocity']['median']}</div><div class="lab">中位速率(mm/yr)</div></div>
  <div class="card"><div class="num">{v['summary']['velocity']['maxAbs']}</div><div class="lab">最大|速率|(mm/yr)</div></div>
- <div class="card"><div class="num">{v['summary']['n_forecastable']}</div><div class="lab">可外推失稳像元</div></div>
+ <div class="card"><div class="num">{v['nForecastable'] if v['nForecastable'] is not None else '数据不足'}</div><div class="lab">可外推失稳像元</div></div>
  <div class="card"><div class="num">{v['snr']}</div><div class="lab">信噪比(≥0.3可靠)</div></div>
 </div>
 
