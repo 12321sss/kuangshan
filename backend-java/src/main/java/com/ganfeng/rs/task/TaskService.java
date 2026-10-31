@@ -46,6 +46,16 @@ public class TaskService {
         return repo.save(t);
     }
 
+    /** 更新任务状态（回调驱动）。 */
+    @Transactional
+    public InterpretTask updateStatus(long id, String status, int progress) {
+        InterpretTask t = repo.findById(id)
+                .orElseThrow(() -> BizException.notFound("任务不存在: " + id));
+        t.setStatus(status);
+        t.setProgress(progress);
+        return repo.save(t);
+    }
+
     @Transactional
     public void delete(long id) {
         repo.findById(id).orElseThrow(() -> BizException.notFound("任务不存在: " + id));

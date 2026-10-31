@@ -3,6 +3,8 @@ package com.ganfeng.rs.deformation;
 import com.ganfeng.rs.common.ApiResponse;
 import com.ganfeng.rs.common.BizException;
 import com.ganfeng.rs.common.PermissionGuard;
+import com.ganfeng.rs.task.InterpretTask;
+import com.ganfeng.rs.task.TaskService;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.web.client.RestTemplateBuilder;
 import org.springframework.security.core.Authentication;
@@ -18,6 +20,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 import java.time.Duration;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -39,14 +42,16 @@ public class DeformationController {
     private final DeformationAnalysisService service;
     private final PermissionGuard guard;
     private final RestTemplate rest;
+    private final TaskService taskService;
 
     @Value("${INFERENCE_BASE_URL:http://localhost:8010}")
     private String inferenceBaseUrl;
 
     public DeformationController(DeformationAnalysisService service, PermissionGuard guard,
-                                 RestTemplateBuilder builder) {
+                                 RestTemplateBuilder builder, TaskService taskService) {
         this.service = service;
         this.guard = guard;
+        this.taskService = taskService;
         this.rest = builder
                 .setConnectTimeout(Duration.ofSeconds(10))
                 .setReadTimeout(Duration.ofSeconds(60))
@@ -57,6 +62,40 @@ public class DeformationController {
      * 读取 inference 已产出的形变分析结果（单轨趋势 + 升降轨联合）。
      * 结果 JSON 由 inference 的 analyze 脚本产出，这里只代理读取，不重算。
      */
+    /**
+     * 发起形变分析任务：登记任务 → 交 inference 后台执行 → 完成后回调更新状态并通知。
+     * 用户提交后即可离开本页，任务在后台跑，完成时顶栏铃铛收到通知。
+     */
+    @PostMapping("/submit")
+    public ApiResponse<Map<String, Object>> submit(@RequestBody Map<String, Object> req,
+                                                   Authentication auth) {
+        Long projectId = Long.valueOf(String.valueOf(req.getOrDefault("projectId", 0L)));
+        guard.requireAccess(projectId, auth);
+
+        String taskType = String.valueOf(req.getOrDefault("taskType", "trend"));
+        InterpretTask task = taskService.record(
+                "形变分析-" + ("fusion".equals(taskType) ? "升降轨联合" : "单轨趋势"),
+                projectId, "DEFORMATION", null);
+
+        // 回调地址（demo 期写本机；生产改为可配置的公网地址）
+        Map<String, Object> payload = new HashMap<>(req);
+        payload.put("callbackUrl", "http://localhost:8080/api/callback/deformation-complete");
+        payload.put("javaTaskId", task.getId());
+        payload.put("userId", auth.getName());
+        try {
+            rest.postForObject(inferenceBaseUrl + "/api/v1/deformation/submit",
+                    payload, Map.class);
+        } catch (Exception e) {
+            throw new BizException(500, "发起形变分析失败（请确认 inference 已启动）：" + e.getMessage());
+        }
+        taskService.updateStatus(task.getId(), "RUNNING", 5);
+
+        Map<String, Object> result = new HashMap<>();
+        result.put("taskId", task.getId());
+        result.put("status", "RUNNING");
+        return ApiResponse.ok(result);
+    }
+
     @GetMapping("/results")
     public ApiResponse<Map<String, Object>> results(@RequestParam Long projectId,
                                                     Authentication auth) {

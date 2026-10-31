@@ -13,8 +13,13 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+import subprocess
+import sys
+
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
+
+from app.tasks import post_callback, submit_task, update_task
 
 from algorithms.deformation import SCALES, analyze_multiscale
 
@@ -131,3 +136,81 @@ def deformation_results():
             continue
 
     return {"code": 0, "message": "success", "data": out}
+
+
+# ---------------------------------------------------------------------------
+# 形变分析异步任务（下载/解算/趋势 作为后台任务执行，完成后回调通知）
+# ---------------------------------------------------------------------------
+_SCRIPTS_DIR = Path(__file__).resolve().parents[2] / "scripts"
+
+
+class DeformationSubmitRequest(BaseModel):
+    """发起形变分析任务。"""
+    callbackUrl: str | None = Field(None, description="完成后回调的 Java 接口")
+    # 以下两个字段由 Java 传入、原样回传（用于回调匹配任务 + 发通知）。
+    # 必须显式声明，否则 Pydantic 会静默丢弃 → 回调拿不到 javaTaskId，任务永远 RUNNING。
+    javaTaskId: int | None = Field(None, description="Java 侧任务 id，回调时原样带回")
+    userId: str | None = Field(None, description="发起人，回调时用于发通知")
+    taskType: str = Field("trend", description="trend=单轨趋势 / fusion=升降轨联合")
+    track: int = Field(18, description="轨道号（trend 用）")
+    descTrack: int = Field(18, description="降轨轨道号（fusion 用）")
+    ascTrack: int = Field(68, description="升轨轨道号（fusion 用）")
+    bbox: str = Field("114.87,28.57,114.93,28.62", description="AOI w,s,e,n")
+
+
+def _run_deformation(task_id: str, payload: dict) -> None:
+    """后台执行形变分析（subprocess 调脚本），完成后回调。"""
+    update_task(task_id, "RUNNING", 10)
+    task_type = payload.get("taskType", "trend")
+    bbox = payload.get("bbox", "114.87,28.57,114.93,28.62")
+    callback_url = payload.get("callbackUrl")
+
+    if task_type == "fusion":
+        cmd = [sys.executable, "-u", str(_SCRIPTS_DIR / "analyze_asc_desc_fusion.py"),
+               "--desc-track", str(payload.get("descTrack", 18)),
+               "--asc-track", str(payload.get("ascTrack", 68)),
+               "--bbox", bbox]
+    else:
+        cmd = [sys.executable, "-u", str(_SCRIPTS_DIR / "analyze_xicheng_trend.py"),
+               "--track", str(payload.get("track", 18)),
+               "--bbox", bbox]
+
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True,
+                              cwd=str(_SCRIPTS_DIR.parent), timeout=1800)
+        ok = proc.returncode == 0
+        update_task(task_id, "SUCCESS" if ok else "FAILED", 100,
+                    stdout=proc.stdout[-500:] if proc.stdout else "")
+        if callback_url:
+            post_callback(callback_url, {
+                "taskId": task_id,
+                "javaTaskId": payload.get("javaTaskId"),
+                "userId": payload.get("userId"),
+                "status": "SUCCESS" if ok else "FAILED",
+                "taskType": task_type,
+                "message": (proc.stdout.strip().splitlines()[-1]
+                            if ok and proc.stdout else "完成"),
+            })
+    except Exception as e:  # noqa: BLE001
+        update_task(task_id, "FAILED", 100, error=str(e))
+        if callback_url:
+            post_callback(callback_url, {
+                "taskId": task_id,
+                "javaTaskId": payload.get("javaTaskId"),
+                "userId": payload.get("userId"),
+                "status": "FAILED",
+                "taskType": task_type, "message": str(e)[:300],
+            })
+
+
+@router.post("/api/v1/deformation/submit")
+def submit_deformation(req: DeformationSubmitRequest):
+    """发起形变分析任务（后台执行，完成后回调 callbackUrl）。
+
+    前端/Java 调用本接口后立即拿到 taskId，可轮询
+    /api/v1/inference/{task_id}/status 看进度；完成时 Java 回调接口会收到通知。
+    """
+    payload = req.model_dump()
+    task_id = submit_task(_run_deformation, payload)
+    return {"code": 0, "message": "success",
+            "data": {"taskId": task_id, "status": "PENDING"}}
