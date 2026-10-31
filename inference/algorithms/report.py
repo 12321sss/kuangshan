@@ -361,6 +361,9 @@ def _add_deformation_section(doc: Document, deformation: dict) -> None:
 
     口径：形变是「坡体确实在动」的直接证据，与六维间接指标互补。
     信噪比不足时必须在报告里如实标注「仅供参考」，不把噪声当形变。
+
+    面向非专业读者：每个指标都配「是什么 / 现在多少 / 意味着什么」的解释，
+    客户不需要懂 InSAR 也能看懂结论。
     """
     _add_heading(doc, "6.1 地表形变监测", level=2)
 
@@ -370,38 +373,69 @@ def _add_deformation_section(doc: Document, deformation: dict) -> None:
     source = deformation.get("source", "-")
 
     _add_kv(doc, "数据来源", str(source))
-    _add_kv(doc, "最大形变速率", f"{velocity} mm/yr" if velocity is not None else "无数据")
-    _add_kv(doc, "形变加速度", f"{accel} mm/yr²" if accel is not None else "无数据")
+
+    # ---- 速率：数值 + 通俗解释 ----
+    if velocity is not None:
+        _add_kv(doc, "最大形变速率", f"{velocity} mm/yr")
+        _add_note(doc, "说明：形变速率表示地表每年沿雷达视线方向移动的距离，"
+                       "正值为向卫星靠近、负值为远离。这是判断「坡体是否在动、动得多快」"
+                       "的最基本指标。")
+    else:
+        _add_kv(doc, "最大形变速率", "无数据")
+
+    # ---- 加速度：数值 + 解释（强调为什么可能不可信）----
+    if accel is not None:
+        _add_kv(doc, "形变加速度", f"{accel} mm/yr²")
+        _add_note(doc, "说明：加速度反映「速率本身是否在加快」。它比速率更关键——"
+                       "失稳的前兆通常是「越动越快」。但加速度是速率的二阶变化，"
+                       "对观测噪声极其敏感，观测期太短时算出的值不可信。")
+    else:
+        _add_kv(doc, "形变加速度", "无数据")
+
     _add_kv(doc, "数据可信度", "可靠" if reliable else "信噪比不足（仅供参考）")
-
     if not reliable:
-        _add_note(doc, "本次形变时序信噪比不足（观测期过短或未充分大气校正），"
-                       "速率/加速度仅供趋势参考，不作为风险提级与失稳判定的依据。")
+        _add_note(doc, "现状判断：本次观测期过短（约 3 个月），形变信号淹没在噪声中，"
+                       "因此速率/加速度仅作趋势参考，不作为风险提级与失稳判定的依据——"
+                       "宁可不给结论，也不把噪声当滑坡信号。")
 
-    # 速度分级
+    # ---- 速度分级 + 现状判断 ----
     if velocity is not None:
         v = abs(float(velocity))
         if v < 10:
-            level = "极缓慢"
+            level, verdict = "极缓慢", "量级远低于一般滑坡启动阈值，属正常地表波动范围"
         elif v < 30:
-            level = "缓慢"
+            level, verdict = "缓慢", "已进入需要关注的范围，建议持续观测"
         elif v < 100:
-            level = "中等"
+            level, verdict = "中等", "可能处于蠕滑阶段，应结合边坡单元重点核查"
         elif v < 300:
-            level = "快速"
+            level, verdict = "快速", "接近失稳速率区间，需立即现场核实"
         else:
-            level = "极快速"
-        _add_kv(doc, "速度分级", level + "（参考 Cruden & Varnes 1996）")
+            level, verdict = "极快速", "极可能正在失稳，应立即处置"
+        _add_kv(doc, "速度分级", level + "（参考 Cruden & Varnes 1996 国际滑坡速度分级）")
+        _add_note(doc, f"现状判断：{verdict}。")
 
-    # 失稳外推
+    # ---- 失稳外推 ----
     tf_days = deformation.get("forecastDays")
     if tf_days is not None:
         _add_note(doc, f"倒数速度法外推：按当前加速趋势，预计 {tf_days:.0f} 天后可能失稳"
                        f"（Fukuzono 法，仅作预警参考，需现场复核）")
+    else:
+        _add_note(doc, "失稳时刻外推：本次未给出（观测期不足或未检测到持续加速），"
+                       "不推测一个看似精确的失稳日期。")
 
     if deformation.get("uplift"):
         _add_note(doc, f"形变证据已触发风险提级：{deformation.get('uplift')} 级。")
 
+    # ---- 术语说明（面向非专业读者）----
+    _add_heading(doc, "6.2 术语说明", level=2)
+    _add_note(doc, "LOS（视线向）：雷达卫星沿其观测方向测到的位移，是斜向的，"
+                   "不完全等于垂直沉降。要得到真正的沉降量，需升降轨联合解算。")
+    _add_note(doc, "SBAS：一种利用多期雷达影像反演地表形变时间序列的方法，"
+                   "是 InSAR 时序分析的主流技术。")
+    _add_note(doc, "信噪比：形变信号强度与噪声强度之比，低于 0.3 表示结果不可靠，"
+                   "本报告会如实标注。")
+    _add_note(doc, "mm/yr：毫米/年，地表形变速率的常用单位。")
+    _add_note(doc, "mm/yr²：毫米/年²，加速度单位，表示速率每年变化的快慢。")
+
     _add_note(doc, "形变监测输出为「潜在形变风险筛查」，单轨结果为视线向(LOS)位移，"
                    "不等于垂直沉降；判定需结合边坡单元、现场勘察与多源数据复核。")
-
