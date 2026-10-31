@@ -139,3 +139,41 @@ def auto_reference_mask(pairs: list[Pair],
     mask[:, :b] = True
     mask[:, -b:] = True
     return mask
+
+
+def read_los_vector(path: Path) -> tuple[float, float, float]:
+    """读 GUNW 的代表 LOS 单位向量 (E, N, U)，用于升降轨联合分解。
+
+    为什么取中位值而不是逐像元：
+      NISAR GUNW 的 LOS 向量只在 `metadata/radarGrid/losUnitVectorX/Y`
+      （雷达网格 20×699×710）上提供，**不在 80m 输出网格上**。
+      要逐像元映射得做雷达坐标 → 地理坐标的重采样，代价大且引入插值误差。
+      而 5km 级 AOI 内入射角只变化几度，LOS 向量几乎恒定，
+      取全图中位值的分解误差远小于形变本身的测量不确定度。
+      AOI 跨几十公里时再考虑逐像元映射。
+
+    返回 (east, north, up)，已归一化的单位向量。
+    符号约定：从地面指向卫星，up > 0；与「位移正值 = 向卫星靠近」一致。
+    """
+    import h5py
+
+    base = "science/LSAR/GUNW/metadata/radarGrid"
+    with h5py.File(path, "r") as h:
+        lx = h[f"{base}/losUnitVectorX"][:]
+        ly = h[f"{base}/losUnitVectorY"][:]
+        e = float(np.nanmedian(lx))
+        n = float(np.nanmedian(ly))
+
+    # 单位化约束给 U：X/Y 已知，Z = sqrt(1 - X² - Y²)，取正（指向天空）
+    u = float(np.sqrt(max(1.0 - e * e - n * n, 0.0)))
+    norm = float(np.sqrt(e * e + n * n + u * u)) or 1.0
+    return (e / norm, n / norm, u / norm)
+
+
+def read_pass_direction(path: Path) -> str:
+    """读轨道方向：'Ascending' / 'Descending'（用于标识升/降轨）。"""
+    import h5py
+
+    with h5py.File(path, "r") as h:
+        v = h["science/LSAR/identification/orbitPassDirection"][()]
+    return v.decode() if isinstance(v, bytes) else str(v)
