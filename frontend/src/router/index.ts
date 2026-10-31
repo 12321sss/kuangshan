@@ -31,6 +31,7 @@ const router = createRouter({
         { path: 'boundary', name: 'boundary', component: () => import('@/views/BoundaryView.vue'), meta: { title: '边界管理', module: 'rs', perm: 'page:imagery' } },
         { path: 'classify', name: 'classify', component: () => import('@/views/ClassifyView.vue'), meta: { title: '监督分类', module: 'rs', perm: 'page:extract' } },
         { path: 'change-monitor', name: 'change-monitor', component: () => import('@/views/ChangeMonitorView.vue'), meta: { title: '变化监测', module: 'rs', perm: 'page:extract' } },
+        { path: 'deformation', name: 'deformation', component: () => import('@/views/DeformationView.vue'), meta: { title: '形变监测', module: 'rs', perm: 'page:deformation' } },
         { path: 'fusion', name: 'fusion', component: () => import('@/views/FusionView.vue'), meta: { title: '结果融合', module: 'rs', perm: 'page:analysis' } },
         { path: 'extract', name: 'extract', component: () => import('@/views/ExtractView.vue'), meta: { title: '影像解译', module: 'rs', perm: 'page:extract' } },
         { path: 'analysis', name: 'analysis', component: () => import('@/views/AnalysisView.vue'), meta: { title: '变化分析', module: 'report', perm: 'page:analysis' } },
