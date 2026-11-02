@@ -89,11 +89,44 @@ cd inference
 
 ## 环境变量
 
-见 `.env.example`。常用的三个：
+见 `.env.example`。常用的四个：
 
 1. `INFERENCE_CALLBACK_TOKEN`：回调 Java 的鉴权头，**必须与 Java 侧一致**，否则 401。
 2. `INFERENCE_CACHE_DIR`：瓦片缓存位置，默认 `inference/.cache`（已有 150MB+ 预热瓦片）。
 3. `INFERENCE_LOG_LEVEL`：日志级别，排查时设 `DEBUG`。
+4. `SNAPHU_EXE`：snaphu 可执行文件路径（**仅当装了自定义位置才需要**）。
+   20m 相位解缠用，默认会在 `D:\Dev\snaphu\...\bin\snaphu.exe`、`/usr/bin/snaphu`
+   等常见位置自动查找。
+
+## 20m 相位解缠（形变 C 阶段）
+
+三个后端，`unwrap_auto` 按环境自动选，产物格式完全一致：
+
+| 后端 | 依赖 | 平台 | 说明 |
+|---|---|---|---|
+| `snaphu` | snaphu-py | 仅 Linux/macOS | 工业级 network-flow，需编译 |
+| `snaphu-exe` | **ESA 预编译 snaphu.exe** | **Windows 也可** | 同上算法，**推荐** |
+| `python` | scikit-image | 全平台 | Herráez 2D 兜底，精度略逊 |
+
+Windows 一键安装（下载 ESA 官方包并解压）：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/setup_snaphu_windows.ps1
+```
+
+自检与使用：
+
+```bash
+python scripts/unwrap.py --synthetic --out .cache/unwrap_test      # 无数据也能验链路
+python scripts/unwrap.py --input GUNW.h5 --aoi 114.87,28.57,114.93,28.62 --backend snaphu-exe --out out/
+```
+
+**两个必须注意的点**（踩过坑，已有测试守护）：
+1. snaphu 默认文件格式不是单通道 float32（输入 `COMPLEX_DATA`、输出 `ALT_LINE_DATA`），
+   必须用配置文件声明为 `FLOAT_DATA`，否则结果完全错乱；
+2. 电离层相位屏必须与官方产品口径一致地减去，否则大范围会被电离层延迟污染。
+
+细节见 `docs/26-形变监测落地瓶颈与约束.md` 第 1 节。
 
 ## 口径红线（写代码时不要越界）
 

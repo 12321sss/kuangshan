@@ -12,9 +12,10 @@
     python scripts/unwrap.py --synthetic --out out/
 
 指定后端：
-    --backend auto   默认。有 snaphu 用 snaphu，否则退回纯 Python
-    --backend snaphu 强制 snaphu（Linux/macOS）
-    --backend python 强制纯 Python（任意平台）
+    --backend auto       默认。snaphu-py → snaphu.exe → 纯 Python，逐级降级
+    --backend snaphu     强制 snaphu（snaphu-py 或 snaphu.exe 均可，工业级）
+    --backend snaphu-exe 强制调用 snaphu 可执行文件（ESA 官方 Windows 包也能用）
+    --backend python     强制纯 Python（任意平台，精度略逊）
 
 输出（三份 GeoTIFF + 一份元数据 JSON，两条后端产物格式完全一致）
     unwrapped_phase.tif   解缠相位（弧度）
@@ -42,11 +43,13 @@ import numpy as np
 
 from algorithms.unwrap import (
     L_BAND_WAVELENGTH_M,
+    find_snaphu_exe,
     phase_to_los_mm,
     read_wrapped,
     to_phase_corr,
     unwrap_auto,
     unwrap_python,
+    unwrap_snaphu_exe,
 )
 
 
@@ -122,7 +125,8 @@ def main() -> int:
     src.add_argument("--synthetic", action="store_true", help="用合成形变场自检（无需数据）")
     ap.add_argument("--aoi", default="114.87,28.57,114.93,28.62", help="AOI: w,s,e,n")
     ap.add_argument("--out", default=".cache/nisar/unwrapped", help="输出目录")
-    ap.add_argument("--backend", default="auto", choices=["auto", "snaphu", "python"])
+    ap.add_argument("--backend", default="auto",
+                    choices=["auto", "snaphu", "snaphu-exe", "python"])
     ap.add_argument("--polar", default="HH", help="极化（GUNW 常用 HH）")
     ap.add_argument("--coh-min", type=float, default=0.05, help="纯 Python 后端的相干性阈值")
     args = ap.parse_args()
@@ -154,11 +158,17 @@ def main() -> int:
     if args.backend == "python":
         unw = unwrap_python(phase, corr, coh_min=args.coh_min)
         backend = "python"
-    elif args.backend == "snaphu":
-        unw, backend = unwrap_auto(phase, corr, coh_min=args.coh_min)
-        if backend != "snaphu":
-            print("  ✗ 指定 snaphu 但当前环境没有 snaphu（仅 Linux/macOS 可装）")
-            return 2
+    elif args.backend in ("snaphu", "snaphu-exe"):
+        if args.backend == "snaphu-exe":
+            # 强制走可执行文件后端（Windows 上通常就是这条）
+            unw = unwrap_snaphu_exe(phase, corr, coh_min=args.coh_min)
+            backend = "snaphu-exe"
+        else:
+            unw, backend = unwrap_auto(phase, corr, coh_min=args.coh_min)
+            if backend not in ("snaphu", "snaphu-exe"):
+                print("  ✗ 指定 snaphu 但未找到 snaphu（snaphu-py 或 snaphu.exe）")
+                print("      Windows：设置环境变量 SNAPHU_EXE 指向 bin/snaphu.exe")
+                return 2
     else:
         unw, backend = unwrap_auto(phase, corr, coh_min=args.coh_min)
     elapsed = time.time() - t0
